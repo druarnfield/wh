@@ -28,6 +28,31 @@ SQL Server. Excel/CSV readers for messy business files. Oracle later.
   readers, configless module-level fallback. Plan:
   `docs/plans/2026-07-19-warehouse-tools-phase4.md`.
 - Design fully delivered. Later: Oracle source, append/upsert push.
+- Semantics phase COMPLETE (2026-07-19): BSL integration —
+  `models()`/`model()`/`frame()`, `[semantics]` extra, validate check.
+  Design: `docs/plans/2026-07-19-semantics-design.md` (adversarially
+  reviewed); plan: `docs/plans/2026-07-19-semantics-phase.md`.
+
+## Semantics notes
+
+- wh owns NO query semantics: BSL's fluent API is the query language. An
+  earlier metric() kwargs wrapper was designed and deliberately killed —
+  do not reintroduce a query dialect.
+- Loading is merge-then-one-call (`from_config` on all files merged):
+  per-file `from_yaml` breaks cross-file join references. BSL 0.3.15 join
+  QUERYING is broken anyway (poisons all queries on a joining model);
+  `test_join_dimension_query` is strict-xfail and will flag the fixing
+  release. File the upstream issues (join bug; raw-column error messages;
+  case-only rename bug below).
+- Case-only renames (dim `specialty` over `_.Specialty`) break BSL/ibis
+  execution with obscure schema errors — `merge_model_files` lints and
+  refuses them. Keep exact column case or a genuinely different name.
+- Caches are SELF-KEYING on connection/backend object identity (`ws.con is
+  cached_con`). Never add invalidation hooks — they miss reopen paths.
+- Module `semantics.py` vs verbs `models/model/frame`; `frames.py` module
+  vs `frame` verb — names differ deliberately (shadowing gotcha).
+- BSL is 0.x, pinned `>=0.3.15,<0.4`; churn (including YAML) is absorbed
+  in semantics.py only. Upgrades are deliberate.
 
 ## Phase 4 notes
 

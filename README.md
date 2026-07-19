@@ -34,6 +34,14 @@ df = wh.clean(raw,                       # composable cleaners, polars or pandas
 df = wh.read_csv("easy.csv")             # DuckDB's sniffing reader
 wh.read_excel("messy.xlsx", land="files.raw")   # or straight into the .duckdb
 
+# semantic layer (optional extra): define metrics once, same numbers everywhere
+wl = wh.model("waitlist")                     # from semantics/*.yml, bound to the mirror
+df = wh.frame(                                # frame() converts anything to your backend
+    wl.filter(_.Category == "1")
+      .group_by("Specialty")
+      .aggregate("patients_waiting", "median_wait_days")
+)
+
 # coming later: oracle source, append/upsert push
 ```
 
@@ -106,6 +114,32 @@ wh mirror --only waitlist   # refresh one table; the rest carry over
 
 A failed build never touches the live `.duckdb` or parquet files. Freshness
 metadata lives in `_mirror.meta` inside the database.
+
+## Semantic layer
+
+Install the extra (`warehouse-tools[semantics]`) and drop model YAML into
+`semantics/` next to `wh.yaml` (dir configurable via `semantics: dir:`):
+
+```yaml
+waitlist:
+  table: outpatient_waitlist_current   # bare = main schema; files.x for others
+  dimensions:
+    Specialty: _.Specialty             # keep the column's exact case, or use
+    Category:                          # a genuinely different name — a case-
+      expr: _.Category                 # only rename is refused (upstream bug)
+      description: "Urgency category"
+  measures:
+    patients_waiting: _.PatUrnCoded.nunique()
+    median_wait_days: _.WaitingTime.median()
+```
+
+`wh` wraps no query API: [BSL's fluent
+API](https://github.com/boringdata/boring-semantic-layer) is the query
+language (`.filter/.group_by/.aggregate/.sql()`); `wh.model()` looks up,
+`wh.frame()` converts results (or any frame-ish object) to your backend.
+`wh validate` checks models — structure always, full binding when the
+mirror file exists. Joins load but querying them is broken upstream in BSL
+0.3.15 (a strict-xfail test watches for the fix).
 
 ## Development
 

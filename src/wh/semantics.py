@@ -7,11 +7,31 @@ docs/plans/2026-07-19-semantics-design.md.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import yaml
 
 from .errors import SemanticsError
+
+_SIMPLE_COL = re.compile(r"_\.(\w+)")
+
+
+def _lint_case_only_renames(fname: str, model: str, spec: dict) -> None:
+    """Verified upstream bug (BSL 0.3.15 / ibis 12): a dimension or measure
+    whose name equals its source column EXCEPT for case breaks execution
+    with obscure schema errors. Refuse at load with a real message."""
+    for section in ("dimensions", "measures"):
+        for name, item in (spec.get(section) or {}).items():
+            expr = item.get("expr") if isinstance(item, dict) else item
+            m = _SIMPLE_COL.fullmatch(str(expr or "").strip())
+            if m and m.group(1) != name and m.group(1).lower() == str(name).lower():
+                raise SemanticsError(
+                    f"{fname}: model '{model}': '{name}' renames column "
+                    f"'{m.group(1)}' only by case — this breaks query execution "
+                    f"upstream. Use the exact column case ('{m.group(1)}') or a "
+                    f"genuinely different name."
+                )
 
 
 def merge_model_files(directory: Path) -> tuple[dict, dict]:
@@ -41,6 +61,7 @@ def merge_model_files(directory: Path) -> tuple[dict, dict]:
                 raise SemanticsError(
                     f"{f.name}: model '{name}' needs a 'table:' key"
                 )
+            _lint_case_only_renames(f.name, name, spec)
             merged[name] = spec
             origins[name] = f.name
     return merged, origins

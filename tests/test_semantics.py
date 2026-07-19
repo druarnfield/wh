@@ -50,6 +50,34 @@ def test_merge_empty_dir(tmp_path):
     assert merge_model_files(d) == ({}, {})
 
 
+def test_merge_rejects_case_only_renames(tmp_path):
+    # verified upstream bug (BSL 0.3.15/ibis 12): a dim named 'specialty'
+    # over column _.Specialty breaks both to_pyarrow() and execute() with
+    # obscure schema errors — catch it at load with a real message
+    d = write_models(tmp_path / "s", {
+        "a.yml": (
+            "m:\n  table: t\n"
+            "  dimensions:\n    specialty: _.Specialty\n"
+        ),
+    })
+    with pytest.raises(SemanticsError, match="only by case"):
+        merge_model_files(d)
+
+
+def test_merge_allows_exact_case_and_real_renames(tmp_path):
+    d = write_models(tmp_path / "s", {
+        "a.yml": (
+            "m:\n  table: t\n"
+            "  dimensions:\n"
+            "    Specialty: _.Specialty\n"          # exact case: fine
+            "    clinical_spec:\n"
+            "      expr: _.Specialty\n"             # real rename: fine
+        ),
+    })
+    merged, _ = merge_model_files(d)
+    assert "m" in merged
+
+
 def test_models_bind_and_query(semantic_project):
     from wh.workspace import Workspace
 

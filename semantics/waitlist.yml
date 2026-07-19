@@ -1,0 +1,24 @@
+waitlist:
+  table: outpatient_waitlist_current
+  description: "Current outpatient waitlist, one row per waiting-list entry"
+  dimensions:
+    # dim names keep the column's exact case: a case-only rename (e.g.
+    # specialty: _.Specialty) breaks query execution upstream — wh refuses it
+    Specialty:
+      expr: _.Specialty
+      description: "Clinical specialty of the referral"
+    ServiceGroup: _.ServiceGroup
+    Facility: _.Facility
+    Category:
+      expr: _.Category
+      description: "Urgency category"
+  measures:
+    patients_waiting:
+      expr: _.PatUrnCoded.nunique()
+      description: "Distinct patients on the list"
+    entries:
+      expr: _.count()
+      description: "Waiting-list entries (a patient can hold several)"
+    median_wait_days:
+      expr: _.WaitingTime.median()
+      description: "Median waiting time in days"
