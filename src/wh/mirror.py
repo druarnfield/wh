@@ -110,6 +110,15 @@ def _create_view(con, spec: TableSpec, final_file: Path) -> None:
         con.execute(f"COMMENT ON VIEW {spec.qualified} IS {sql_str(spec.description)}")
 
 
+def _prev_has(con, name: str, schema: str) -> bool:
+    (n,) = con.execute(
+        "SELECT count(*) FROM duckdb_tables() "
+        "WHERE database_name = 'prev' AND schema_name = ? AND table_name = ?",
+        [schema, name],
+    ).fetchone()
+    return n > 0
+
+
 def build(
     cfg: Config,
     extract: Extract,
@@ -119,12 +128,16 @@ def build(
     log: Callable[[str], None] = print,
 ) -> None:
     tables = cfg.tables
+    carried: list[TableSpec] = []
     if only:
         wanted = set(only)
         missing = wanted - {t.name for t in cfg.tables}
         if missing:
             raise ConfigError(f"--only names not in config: {sorted(missing)}")
-        tables = [t for t in cfg.tables if t.name in wanted]
+        if cfg.duckdb_path.exists():
+            tables = [t for t in cfg.tables if t.name in wanted]
+            carried = [t for t in cfg.tables if t.name not in wanted]
+        # no previous mirror: nothing to carry, fall through to a full build
 
     staging_root = cfg.duckdb_path.parent / ".mirror_staging"
     if staging_root.exists():
@@ -137,9 +150,49 @@ def build(
     t0 = time.time()
     try:
         con.execute(META_DDL)
+        pending_views: list[tuple[TableSpec, Path]] = []
+
+        # ---- phase 0: carry over unselected tables from the live mirror ----
+        # Anything missing from the previous mirror is extracted fresh instead,
+        # so the result is always a complete mirror.
+        if carried:
+            con.execute(f"ATTACH {sql_str(str(cfg.duckdb_path))} AS prev (READ_ONLY)")
+            has_meta = _prev_has(con, "meta", "_mirror")
+            for spec in carried:
+                if spec.mode == "native":
+                    if not _prev_has(con, spec.name, spec.schema_in_duckdb):
+                        tables.append(spec)
+                        continue
+                    con.execute(f'CREATE SCHEMA IF NOT EXISTS "{spec.schema_in_duckdb}"')
+                    con.execute(
+                        f"CREATE TABLE {spec.qualified} "
+                        f"AS SELECT * FROM prev.{spec.qualified}"
+                    )
+                    if spec.description:
+                        con.execute(
+                            f"COMMENT ON TABLE {spec.qualified} IS "
+                            f"{sql_str(spec.description)}"
+                        )
+                else:  # parquet: copy the live file into staging
+                    rel = Path(spec.schema_in_duckdb) / f"{spec.name}.parquet"
+                    live_file = cfg.parquet_dir / rel
+                    if not live_file.exists():
+                        tables.append(spec)
+                        continue
+                    dst = staging_parquet / rel
+                    dst.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(live_file, dst)
+                    pending_views.append((spec, cfg.parquet_dir / rel))
+                if has_meta:
+                    con.execute(
+                        "INSERT INTO _mirror.meta SELECT * FROM prev._mirror.meta "
+                        "WHERE schema_name = ? AND table_name = ?",
+                        [spec.schema_in_duckdb, spec.name],
+                    )
+                log(f"  {spec.schema_in_duckdb}.{spec.name:<30} carried over")
+            con.execute("DETACH prev")
 
         # ---- phase 1: extract into staging ----
-        pending_views: list[tuple[TableSpec, Path]] = []
         for spec in tables:
             start = time.time()
             rows, final_file = _load_table(
