@@ -119,9 +119,10 @@ def test_push_allow_parsed(tmp_path):
 
 
 def test_push_allow_entry_must_be_two_part(tmp_path):
-    cfg_dict = {**VALID, "push": {"allow": ["Sandbox"]}}
-    with pytest.raises(ConfigError, match="Database.schema"):
-        load_config(write(tmp_path, cfg_dict))
+    for bad in ("Sandbox", "Sandbox.", ".dbo", 1.5):
+        cfg_dict = {**VALID, "push": {"allow": [bad]}}
+        with pytest.raises(ConfigError, match="Database.schema"):
+            load_config(write(tmp_path, cfg_dict))
 
 
 def test_missing_file_raises_configerror(tmp_path):

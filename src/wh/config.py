@@ -185,7 +185,8 @@ def load_config(path: Path | str) -> Config:
 
     push_allow = list((raw.get("push") or {}).get("allow") or [])
     for entry in push_allow:
-        if len(str(entry).split(".")) != 2:
+        parts = str(entry).split(".")
+        if not isinstance(entry, str) or len(parts) != 2 or not all(parts):
             raise ConfigError(
                 f"push.allow entry '{entry}' must be 'Database.schema'"
             )

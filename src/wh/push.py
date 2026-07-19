@@ -3,12 +3,15 @@
 The Arrow -> SQL Server type mapping (the contract for pushed tables):
 
     int8/int16      SMALLINT        date32/date64   DATE
-    int32/uint8/16  INT             timestamp[*]    DATETIME2
-    int64/uint32+   BIGINT          time32/time64   TIME
-    float32         REAL            decimal(p,s)    DECIMAL(p,s)
-    float64         FLOAT           binary          VARBINARY(MAX)
-    bool            BIT             string          NVARCHAR(MAX)
+    int32/uint8/16  INT             timestamp       DATETIME2
+    int64/uint32+   BIGINT          timestamp[tz]   DATETIMEOFFSET
+    float32         REAL            time32/time64   TIME
+    float64         FLOAT           decimal(p,s)    DECIMAL(p,s)
+    bool            BIT             binary          VARBINARY(MAX)
+    string          NVARCHAR(MAX)   dictionary<T>   mapped as T (decoded)
 
+Tz-aware timestamps MUST be DATETIMEOFFSET: the driver binds them with their
+offset, and SQL Server would silently discard it converting to DATETIME2.
 Anything else (lists, structs, ...) is refused with a WhError.
 """
 
@@ -17,7 +20,7 @@ from __future__ import annotations
 import pyarrow as pa
 import pyarrow.types as pat
 
-from .errors import PushRefused, WhError
+from .errors import PushRefused, SourceError, WhError
 
 
 def parse_target(table: str) -> tuple[str, str, str]:
@@ -49,6 +52,8 @@ def quote(ident: str) -> str:
 
 def sql_type(field: pa.Field) -> str:
     t = field.type
+    if pat.is_dictionary(t):
+        return sql_type(pa.field(field.name, t.value_type))
     if pat.is_int8(t) or pat.is_int16(t):
         return "SMALLINT"
     if pat.is_int32(t) or pat.is_uint16(t) or pat.is_uint8(t):
@@ -66,7 +71,7 @@ def sql_type(field: pa.Field) -> str:
     if pat.is_date(t):
         return "DATE"
     if pat.is_timestamp(t):
-        return "DATETIME2"
+        return "DATETIMEOFFSET" if t.tz is not None else "DATETIME2"
     if pat.is_time(t):
         return "TIME"
     if pat.is_decimal(t):
@@ -80,8 +85,17 @@ def sql_type(field: pa.Field) -> str:
 
 _EXISTS_SQL = (
     "SELECT count(*) FROM {db}.INFORMATION_SCHEMA.TABLES "
-    "WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?"
+    "WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? AND TABLE_TYPE = 'BASE TABLE'"
 )
+
+
+def _rollback_quietly(conn) -> None:
+    """Rollback without masking the original error (the connection may
+    already be dead, making rollback itself raise)."""
+    try:
+        conn.rollback()
+    except Exception:
+        pass
 
 
 def push_arrow(
@@ -120,14 +134,24 @@ def push_arrow(
             col_list = ", ".join(quote(f.name) for f in table.schema)
             placeholders = ", ".join("?" * table.num_columns)
             insert = f"INSERT INTO {qualified} ({col_list}) VALUES ({placeholders})"
+            # materialises the whole table as Python rows (fine for
+            # analysis-sized results); batch_size only bounds executemany calls
             cols = [c.to_pylist() for c in table.columns]
             rows = list(zip(*cols))
             for i in range(0, len(rows), batch_size):
                 cursor.executemany(insert, rows[i : i + batch_size])
         conn.commit()
         return table.num_rows
+    except WhError:
+        _rollback_quietly(conn)
+        raise
+    except Exception as e:
+        _rollback_quietly(conn)
+        raise SourceError(
+            f"push to {database}.{schema}.{name} failed: {e}"
+        ) from e
     except BaseException:
-        conn.rollback()
+        _rollback_quietly(conn)
         raise
     finally:
         cursor.close()

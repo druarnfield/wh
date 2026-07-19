@@ -55,6 +55,19 @@ def test_sql_type_unsupported():
         sql_type(pa.field("c", pa.list_(pa.int64())))
 
 
+def test_sql_type_tz_aware_timestamp_keeps_offset():
+    # driver binds tz-aware datetimes as DATETIMEOFFSET; DATETIME2 would
+    # silently discard the offset server-side
+    assert sql_type(pa.field("c", pa.timestamp("us", tz="UTC"))) == "DATETIMEOFFSET"
+    assert sql_type(pa.field("c", pa.timestamp("us"))) == "DATETIME2"
+
+
+def test_sql_type_dictionary_recurses_to_value_type():
+    # polars Categorical arrives dictionary-encoded; to_pylist() decodes it
+    t = pa.dictionary(pa.int32(), pa.large_string())
+    assert sql_type(pa.field("c", t)) == "NVARCHAR(MAX)"
+
+
 class FakeCursor:
     def __init__(self, table_exists):
         self.table_exists = table_exists
@@ -178,6 +191,33 @@ def test_workspace_push_happy_path(project, monkeypatch):
     assert conn.commits == 1
 
 
+def test_push_arrow_quotes_hostile_identifiers():
+    from wh.push import push_arrow
+
+    conn = FakeConn(table_exists=False)
+    tbl = pa.table({"we]ird": [1]})
+    push_arrow(conn, "Sand]box", "dbo", "res", tbl)
+    create = next(s for s in conn.cur.executed if s.startswith("CREATE TABLE"))
+    assert create == "CREATE TABLE [Sand]]box].[dbo].[res] ([we]]ird] BIGINT)"
+
+
+def test_push_arrow_exists_check_ignores_views():
+    from wh.push import push_arrow
+
+    conn = FakeConn(table_exists=False)
+    push_arrow(conn, "Sandbox", "dbo", "res", TABLE)
+    assert "TABLE_TYPE = 'BASE TABLE'" in conn.cur.executed[0]
+
+
+def test_push_arrow_batches_inserts():
+    from wh.push import push_arrow
+
+    conn = FakeConn(table_exists=False)
+    tbl = pa.table({"n": list(range(7))})
+    push_arrow(conn, "Sandbox", "dbo", "res", tbl, batch_size=3)
+    assert [len(rows) for _, rows in conn.cur.many] == [3, 3, 1]
+
+
 def test_module_verbs_survive_submodule_imports():
     # a submodule's FIRST initialisation binds it onto the package, clobbering
     # any same-named function from __init__ — so those submodules must be
@@ -193,7 +233,8 @@ def test_module_verbs_survive_submodule_imports():
     assert callable(wh.workspace)
 
 
-def test_push_arrow_rolls_back_on_error():
+def test_push_arrow_rolls_back_and_wraps_driver_errors():
+    from wh.errors import SourceError
     from wh.push import push_arrow
 
     conn = FakeConn(table_exists=False)
@@ -202,7 +243,25 @@ def test_push_arrow_rolls_back_on_error():
         raise RuntimeError("bulk load failed")
 
     conn.cur.executemany = explode
-    with pytest.raises(RuntimeError):
+    with pytest.raises(SourceError, match="bulk load failed"):
         push_arrow(conn, "Sandbox", "dbo", "res", TABLE, if_exists="fail")
     assert conn.rollbacks == 1
     assert conn.commits == 0
+
+
+def test_push_arrow_failed_rollback_keeps_original_error():
+    from wh.errors import SourceError
+    from wh.push import push_arrow
+
+    conn = FakeConn(table_exists=False)
+
+    def explode(sql, rows):
+        raise RuntimeError("connection lost")
+
+    def rollback_also_dead():
+        raise RuntimeError("rollback failed too")
+
+    conn.cur.executemany = explode
+    conn.rollback = rollback_also_dead
+    with pytest.raises(SourceError, match="connection lost"):
+        push_arrow(conn, "Sandbox", "dbo", "res", TABLE)

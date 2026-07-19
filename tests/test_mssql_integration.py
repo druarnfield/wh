@@ -42,7 +42,18 @@ def test_push_roundtrip(tmp_path):
     (tmp_path / "wh.yaml").write_text(yaml.safe_dump(cfg, sort_keys=False))
     ws = wh.workspace(tmp_path / "wh.yaml")
 
-    df = pl.DataFrame({"n": [1, 2, 3], "s": ["x", "y", None]})
+    from datetime import datetime, timedelta, timezone
+
+    perth = timezone(timedelta(hours=8))
+    ts = datetime(2026, 1, 1, 12, 0, 0, tzinfo=perth)
+    df = pl.DataFrame(
+        {
+            "n": [1, 2, 3],
+            "s": ["x", "y", None],
+            "ts": pl.Series([ts] * 3, dtype=pl.Datetime("us", "+08:00")),
+            "cat": pl.Series(["a", "b", "a"], dtype=pl.Categorical),
+        }
+    )
     target = "ExecReporting.dbo.wh_push_test"
     try:
         assert ws.push(df, target) == 3
@@ -50,10 +61,14 @@ def test_push_roundtrip(tmp_path):
         with pytest.raises(wh.WhError, match="replace"):
             ws.push(df, target)
         back = ws.pull(
-            "SELECT n, s FROM [ExecReporting].[dbo].[wh_push_test] ORDER BY n"
+            "SELECT n, s, CAST(cat AS NVARCHAR(10)) AS cat, "
+            "DATEPART(TZOFFSET, ts) AS tz_minutes "
+            "FROM [ExecReporting].[dbo].[wh_push_test] ORDER BY n"
         )
         assert back["n"].to_list() == [1, 2, 3]
         assert back["s"].to_list() == ["x", "y", None]
+        assert back["cat"].to_list() == ["a", "b", "a"]
+        assert back["tz_minutes"].to_list() == [480, 480, 480]   # offset kept
         with pytest.raises(wh.PushRefused):
             ws.push(df, "ExecReporting.other_schema.t")
     finally:
