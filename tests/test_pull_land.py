@@ -75,6 +75,64 @@ def test_land_bad_identifier(project, fake_mssql):
         ws.land("SELECT 1", table="a.b.c")
 
 
+def test_land_escapes_quotes_in_identifiers(project, fake_mssql):
+    ws = Workspace.load(project / "wh.yaml")
+    ws.land("SELECT 1", table='we"ird')          # literal name, no SQL breakout
+    assert ws.con.execute('SELECT count(*) FROM "main"."we""ird"').fetchone() == (3,)
+
+
+def test_land_empty_identifier_part(project, fake_mssql):
+    ws = Workspace.load(project / "wh.yaml")
+    with pytest.raises(WhError, match="table"):
+        ws.land("SELECT 1", table="scratch.")
+
+
+def test_land_refuses_mirror_schema(project, fake_mssql):
+    ws = Workspace.load(project / "wh.yaml")
+    with pytest.raises(WhError, match="_mirror"):
+        ws.land("SELECT 1", table="_mirror.meta")
+
+
+def test_land_streams_without_materialising(project, monkeypatch):
+    # guard the invariant: land() must hand the Arrow reader straight to
+    # DuckDB, never materialise via frames.to_arrow
+    import wh.frames as frames_mod
+    import wh.sources.mssql as mssql_mod
+
+    class FakeStreamingExtractor:
+        def __init__(self, source):
+            pass
+
+        def query(self, sql, batch_size=100_000):
+            batch = pa.RecordBatch.from_pydict({"n": [1, 2, 3]})
+            return pa.RecordBatchReader.from_batches(batch.schema, [batch])
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(mssql_mod, "MssqlExtractor", FakeStreamingExtractor)
+
+    def no_materialise(obj):
+        raise AssertionError("land() must stream, not materialise")
+
+    monkeypatch.setattr(frames_mod, "to_arrow", no_materialise)
+    ws = Workspace.load(project / "wh.yaml")
+    assert ws.land("SELECT 1", table="stream_check") == 3
+
+
+def test_pull_invalid_backend_fails_before_querying(project, monkeypatch):
+    import wh.sources.mssql as mssql_mod
+
+    class ExplodingExtractor:
+        def __init__(self, source):
+            raise AssertionError("extractor must not be constructed")
+
+    monkeypatch.setattr(mssql_mod, "MssqlExtractor", ExplodingExtractor)
+    ws = Workspace.load(project / "wh.yaml")
+    with pytest.raises(WhError, match="backend"):
+        ws.pull("SELECT 1", backend="polards")
+
+
 def test_module_level_pull(project, fake_mssql, monkeypatch):
     monkeypatch.chdir(project)
     monkeypatch.setattr(wh, "_default", None)

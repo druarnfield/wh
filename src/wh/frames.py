@@ -31,11 +31,17 @@ def to_arrow(obj) -> pa.Table:
         return obj
     if isinstance(obj, pa.RecordBatchReader):
         return obj.read_all()
+    if isinstance(obj, pa.RecordBatch):
+        return pa.Table.from_batches([obj])
     if isinstance(obj, duckdb.DuckDBPyRelation):
         return obj.to_arrow_table()
     try:
         return nw.from_native(obj, eager_only=True).to_arrow()
     except TypeError as e:
+        if obj.__class__.__name__ == "LazyFrame":
+            raise WhError(
+                "that's a polars LazyFrame — call .collect() first"
+            ) from e
         raise WhError(
             f"{type(obj).__name__} is not a supported frame type "
             f"(pandas/polars/pyarrow/duckdb relation)"

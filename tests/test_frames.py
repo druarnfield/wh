@@ -37,6 +37,18 @@ def test_to_arrow_rejects_junk():
         to_arrow({"a": [1, 2]})
 
 
+def test_to_arrow_record_batch_reader():
+    batch = pa.RecordBatch.from_pydict({"a": [1, 2]})
+    reader = pa.RecordBatchReader.from_batches(batch.schema, [batch])
+    assert to_arrow(reader).column("a").to_pylist() == [1, 2]
+
+
+def test_to_arrow_lazyframe_hint():
+    lf = pl.LazyFrame({"a": [1]})
+    with pytest.raises(WhError, match="collect"):
+        to_arrow(lf)
+
+
 def test_from_arrow_backends():
     assert isinstance(from_arrow(TABLE, "polars"), pl.DataFrame)
     assert isinstance(from_arrow(TABLE, "pandas"), pd.DataFrame)

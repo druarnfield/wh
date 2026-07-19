@@ -7,7 +7,7 @@ from pathlib import Path
 import duckdb
 
 from .config import Config, find_config, load_config
-from .errors import ConfigError, WhError
+from .errors import ConfigError, SourceError, WhError
 # NOTE: must be `from .mirror import ...` — `from . import mirror` returns the
 # wh.mirror() FUNCTION defined in __init__.py, which shadows this module.
 from .mirror import build as _build
@@ -100,9 +100,13 @@ class Workspace:
 
     def pull(self, sql: str, *, source: str | None = None, backend: str | None = None):
         """Run sql against a warehouse source, return a dataframe."""
-        from .frames import default_backend, from_arrow, to_arrow
+        from .frames import VALID_BACKENDS, default_backend, from_arrow, to_arrow
         from .sources.mssql import MssqlExtractor
 
+        if backend is not None and backend not in VALID_BACKENDS:
+            raise WhError(
+                f"unknown frames backend '{backend}' (use one of {VALID_BACKENDS})"
+            )
         extractor = MssqlExtractor(self._source(source))
         try:
             table = to_arrow(extractor.query(sql))
@@ -113,7 +117,10 @@ class Workspace:
     def land(self, sql: str, table: str, *, source: str | None = None) -> int:
         """Stream sql results straight into the local DuckDB (constant memory).
 
-        Re-landing the same table replaces it. Returns the row count."""
+        Re-landing the same table replaces it. Returns the row count.
+
+        Landed tables are session scratch: `wh.mirror()` rebuilds the database
+        from the config alone, so a refresh WIPES anything you landed."""
         from .sources.mssql import MssqlExtractor
 
         parts = table.split(".")
@@ -123,17 +130,30 @@ class Workspace:
             schema, name = parts
         else:
             raise WhError(f"table must be 'name' or 'schema.name', got '{table}'")
-        qualified = f'"{schema}"."{name}"'
+        if not schema or not name:
+            raise WhError(f"table must be 'name' or 'schema.name', got '{table}'")
+        if schema == "_mirror":
+            raise WhError("the _mirror schema holds mirror metadata — land elsewhere")
+
+        def qi(ident: str) -> str:
+            return '"' + ident.replace('"', '""') + '"'
+
+        qualified = f"{qi(schema)}.{qi(name)}"
 
         con = self.con
         extractor = MssqlExtractor(self._source(source))
         try:
             con.register("_wh_land_src", extractor.query(sql))
             try:
-                con.execute(f'CREATE SCHEMA IF NOT EXISTS "{schema}"')
-                con.execute(
-                    f"CREATE OR REPLACE TABLE {qualified} AS SELECT * FROM _wh_land_src"
-                )
+                con.execute(f"CREATE SCHEMA IF NOT EXISTS {qi(schema)}")
+                try:
+                    con.execute(
+                        f"CREATE OR REPLACE TABLE {qualified} "
+                        f"AS SELECT * FROM _wh_land_src"
+                    )
+                except duckdb.Error as e:
+                    # a mid-stream source failure surfaces here, via DuckDB
+                    raise SourceError(f"landing '{table}' failed: {e}") from e
             finally:
                 con.unregister("_wh_land_src")
         finally:

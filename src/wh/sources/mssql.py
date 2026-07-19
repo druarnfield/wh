@@ -53,6 +53,8 @@ class MssqlExtractor:
             raise SourceError(f"extract failed for table '{spec.name}': {e}") from e
 
     def close(self) -> None:
-        if self._cursor is not None:
-            self._cursor.close()
-        self._conn.close()
+        try:
+            if self._cursor is not None:
+                self._cursor.close()
+        finally:
+            self._conn.close()
