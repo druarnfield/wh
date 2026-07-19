@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from ..config import Source, TableSpec
+from ..config import DEFAULT_BATCH_SIZE, Source, TableSpec
 from ..errors import SourceError
 
 
@@ -30,20 +30,27 @@ class MssqlExtractor:
             ) from e
         self._cursor = None
 
-    def __call__(self, spec: TableSpec):
+    def query(self, sql: str, batch_size: int = DEFAULT_BATCH_SIZE):
+        """Execute sql, return an Arrow reader (streaming) or table."""
         if self._cursor is not None:
             self._cursor.close()
             self._cursor = None
         cursor = self._conn.cursor()
         try:
-            cursor.execute(spec.source.sql())
+            cursor.execute(sql)
         except Exception as e:
             cursor.close()
-            raise SourceError(f"extract failed for table '{spec.name}': {e}") from e
+            raise SourceError(f"query failed: {e}") from e
         self._cursor = cursor
         if hasattr(cursor, "arrow_reader"):
-            return cursor.arrow_reader(batch_size=spec.batch_size)
+            return cursor.arrow_reader(batch_size=batch_size)
         return cursor.arrow()
+
+    def __call__(self, spec: TableSpec):
+        try:
+            return self.query(spec.source.sql(), spec.batch_size)
+        except SourceError as e:
+            raise SourceError(f"extract failed for table '{spec.name}': {e}") from e
 
     def close(self) -> None:
         if self._cursor is not None:
