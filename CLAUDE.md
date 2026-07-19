@@ -39,11 +39,17 @@ SQL Server. Excel/CSV readers for messy business files. Oracle later.
   earlier metric() kwargs wrapper was designed and deliberately killed —
   do not reintroduce a query dialect.
 - Loading is merge-then-one-call (`from_config` on all files merged):
-  per-file `from_yaml` breaks cross-file join references. BSL 0.3.15 join
-  QUERYING is broken anyway (poisons all queries on a joining model);
-  `test_join_dimension_query` is strict-xfail and will flag the fixing
-  release. File the upstream issues (join bug; raw-column error messages;
-  case-only rename bug below).
+  per-file `from_yaml` breaks cross-file join references. BSL 0.3.15
+  DECLARED-join querying is broken (poisons all queries on a joining
+  model); `test_join_dimension_query` is strict-xfail and will flag the
+  fixing release. QUERY-TIME joins work fully:
+  `wl.join_one(other, on=lambda l, r: l.raw_col == r.raw_col)` — on= gets
+  RAW tables, and dims are model-prefixed afterwards ("wl.specialty").
+  Do NOT build a shim replaying YAML joins: through join_one (query
+  dialect); recommend mirror-level pre-joins for centralised joins.
+  Upstream issue draft: docs/upstream/bsl-join-query-issue.md (not yet
+  filed — user to approve). Also to file: raw-column error messages;
+  case-only rename bug below.
 - Case-only NAME collisions break BSL/ibis execution with obscure schema
   errors — and it's broader than renames: any dim/measure name colliding
   case-insensitively with ANY table column (even computed exprs). Two

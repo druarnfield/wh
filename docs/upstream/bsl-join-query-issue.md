@@ -66,6 +66,17 @@ Removing the `joins:` block makes (2) work normally. Same behaviour via
 on either side — all variants fail. Expected for (1):
 `[["North", 2], ["South", 1]]`.
 
+Notably, the equivalent **query-time** join works perfectly on the same
+data — which may help localise the bug to the declared-join path:
+
+```python
+wl.join_one(clinics, on=lambda l, r: l.clinic_code == r.code) \
+  .group_by("clinics.region").aggregate("patients").execute()
+# region  patients
+# North   2
+# South   1        <- correct, incl. mixed dims and cross-model measures
+```
+
 (3) seems like a second bug: prefixed measures bypass the error but produce a
 grand total, discarding the grouping — silent wrong results.
 

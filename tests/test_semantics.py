@@ -202,6 +202,22 @@ def test_cross_file_join_models_load(semantic_project):
     ws.model("wl_regional")     # lookup succeeds; no KeyError from cross-file ref
 
 
+@pytest.mark.filterwarnings("ignore:Grain mismatch detected")
+def test_query_time_join_works(semantic_project):
+    # the supported join story until upstream fixes declared joins:
+    # join_one at query time, on= over RAW columns, dims prefixed after
+    from wh.workspace import Workspace
+
+    ws = Workspace.load(semantic_project / "wh.yaml")
+    wl, clinics = ws.model("waitlist"), ws.model("clinics")
+    df = ws.frame(
+        wl.join_one(clinics, on=lambda l, r: l.clinic_code == r.code)
+        .group_by("clinics.region")
+        .aggregate("patients_waiting")
+    )
+    assert sorted(df.rows()) == [("North", 2), ("South", 1)]
+
+
 @pytest.mark.xfail(
     strict=True,
     reason="BSL 0.3.15 join querying is broken (grain-mismatch heuristic → "

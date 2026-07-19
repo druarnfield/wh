@@ -138,8 +138,18 @@ API](https://github.com/boringdata/boring-semantic-layer) is the query
 language (`.filter/.group_by/.aggregate/.sql()`); `wh.model()` looks up,
 `wh.frame()` converts results (or any frame-ish object) to your backend.
 `wh validate` checks models — structure always, full binding when the
-mirror file exists. Joins load but querying them is broken upstream in BSL
-0.3.15 (a strict-xfail test watches for the fix).
+mirror file exists.
+
+**Joins:** YAML-declared `joins:` load but querying them is broken upstream
+in BSL 0.3.15 (a strict-xfail test watches for the fix). Until then, two
+working options: pre-join at the mirror layer (a query-defined table in
+`wh.yaml` — best for joins you want centralised), or query-time joins via
+the fluent API, which work fully:
+
+```python
+wl.join_one(clinics, on=lambda l, r: l.clinic_code == r.code) \
+  .group_by("clinics.region").aggregate("patients")   # dims prefixed after a join
+```
 
 ## Development
 
