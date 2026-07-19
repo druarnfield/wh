@@ -158,6 +158,12 @@ wl.join_one(clinics, on=lambda l, r: l.clinic_code == r.code) \
   .group_by("clinics.region").aggregate("patients")   # dims prefixed after a join
 ```
 
+**marimo note:** the variable panel can't inspect a bare semantic table
+(upstream: BSL overrides ibis's `schema()` method as a property, which
+breaks narwhals). Harmless but noisy — bind models to underscore-prefixed
+names (`_wl = wh.model(...)`), or chain inline and bind only the
+`wh.frame(...)` result.
+
 ## Development
 
 ```bash

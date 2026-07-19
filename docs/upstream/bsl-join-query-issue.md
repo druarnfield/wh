@@ -97,3 +97,8 @@ grand total, discarding the grouping — silent wrong results.
    table column (e.g. dim `specialty` over column `Specialty`) fails at
    execution with `schema names don't match input data columns` /
    `KeyError` from pyarrow.*
+3. *`SemanticModel` subclasses `ibis.expr.types.Table` but overrides
+   `schema` (a method on Table) as a property — an LSP break. Anything that
+   duck-types ibis tables and calls `.schema()` (narwhals, and through it
+   marimo's variable inspector) crashes with `TypeError: 'Schema' object is
+   not callable` when handed a semantic table.*

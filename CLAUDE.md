@@ -49,7 +49,9 @@ SQL Server. Excel/CSV readers for messy business files. Oracle later.
   dialect); recommend mirror-level pre-joins for centralised joins.
   Upstream issue draft: docs/upstream/bsl-join-query-issue.md (not yet
   filed — user to approve). Also to file: raw-column error messages;
-  case-only rename bug below.
+  case-only rename bug below; SemanticModel.schema property-vs-method LSP
+  break (crashes narwhals/marimo inspection — advise underscore-prefixed
+  marimo vars).
 - Case-only NAME collisions break BSL/ibis execution with obscure schema
   errors — and it's broader than renames: any dim/measure name colliding
   case-insensitively with ANY table column (even computed exprs). Two
