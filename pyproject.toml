@@ -12,6 +12,9 @@ dependencies = [
     "pyyaml>=6.0.3",
 ]
 
+[project.optional-dependencies]
+excel = ["python-calamine>=0.5"]
+
 [project.scripts]
 wh = "wh.cli:main"
 
@@ -24,7 +27,9 @@ module-name = "wh"
 
 [dependency-groups]
 dev = [
+    "openpyxl>=3.1.5",
     "pandas>=3.0.3",
     "polars>=1.42.1",
     "pytest>=8",
+    "python-calamine>=0.8.2",
 ]
