@@ -13,6 +13,7 @@ shadowing gotcha — see CLAUDE.md.)
 from __future__ import annotations
 
 import re
+from datetime import datetime
 
 import narwhals as nw
 
@@ -61,12 +62,65 @@ def strip_strings(df: nw.DataFrame) -> nw.DataFrame:
     )
 
 
+_EXCEL_EPOCH = datetime(1899, 12, 30)
+_US_PER_DAY = 86_400_000_000
+
+
+def parse_dates(*cols: str, format: str | None = None):
+    """Parse string dates (with `format`, e.g. '%d/%m/%Y') and numeric Excel
+    serials into datetimes. Datetime columns pass through untouched.
+    (Serial conversion is polars-tested; see tests.)"""
+
+    def step(df: nw.DataFrame) -> nw.DataFrame:
+        exprs = []
+        for c in cols:
+            dtype = df.schema[c]
+            if dtype == nw.String:
+                exprs.append(nw.col(c).str.to_datetime(format=format).alias(c))
+            elif dtype.is_numeric():
+                exprs.append(
+                    (
+                        (nw.col(c) * _US_PER_DAY)
+                        .cast(nw.Int64)
+                        .cast(nw.Duration(time_unit="us"))
+                        + nw.lit(_EXCEL_EPOCH)
+                    ).alias(c)
+                )
+            # datetime/date already: leave alone
+        return df.with_columns(*exprs) if exprs else df
+
+    return step
+
+
+def numeric(*cols: str):
+    """Coerce messy string numbers ('1,234', '$5.50', '-', '') to Float64."""
+
+    def step(df: nw.DataFrame) -> nw.DataFrame:
+        exprs = []
+        for c in cols:
+            if df.schema[c] != nw.String:
+                continue
+            stripped = nw.col(c).str.strip_chars().str.replace_all(r"[$€£,\s]", "")
+            exprs.append(
+                nw.when(stripped.is_in(["", "-", "–"]))
+                .then(None)
+                .otherwise(stripped)
+                .cast(nw.Float64)
+                .alias(c)
+            )
+        return df.with_columns(*exprs) if exprs else df
+
+    return step
+
+
 class _Clean:
     """Callable pipeline runner that also namespaces the step functions."""
 
     snake_names = staticmethod(snake_names)
     drop_empty = staticmethod(drop_empty)
     strip_strings = staticmethod(strip_strings)
+    parse_dates = staticmethod(parse_dates)
+    numeric = staticmethod(numeric)
 
     def __call__(self, df, *steps):
         ndf = nw.from_native(df, eager_only=True)

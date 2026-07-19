@@ -52,3 +52,34 @@ def test_steps_compose_in_order(make_frame):
     df = make_frame({" A ": ["  v  ", None], "junk": [None, None]})
     out = clean(df, clean.snake_names, clean.drop_empty, clean.strip_strings)
     assert as_dict(out) == {"a": ["v"]}
+
+
+def test_parse_dates_strings(make_frame):
+    df = make_frame({"d": ["2026-01-02", None]})
+    out = clean(df, clean.parse_dates("d", format="%Y-%m-%d"))
+    assert as_dict(out)["d"][0] == datetime(2026, 1, 2)
+
+
+def test_parse_dates_excel_serials_polars():
+    # serial 45658 = 2025-01-01 (origin 1899-12-30)
+    df = pl.DataFrame({"d": [45658.0, None]})
+    out = clean(df, clean.parse_dates("d"))
+    assert out["d"][0] == datetime(2025, 1, 1)
+
+
+def test_parse_dates_passthrough_datetime(make_frame):
+    df = make_frame({"d": [datetime(2026, 1, 1)]})
+    out = clean(df, clean.parse_dates("d"))
+    assert as_dict(out)["d"] == [datetime(2026, 1, 1)]
+
+
+def test_numeric(make_frame):
+    df = make_frame({"v": ["1,234", "$5.50", " 7 ", "-", "", None]})
+    out = clean(df, clean.numeric("v"))
+    assert as_dict(out)["v"] == [1234.0, 5.5, 7.0, None, None, None]
+
+
+def test_numeric_leaves_numbers(make_frame):
+    df = make_frame({"v": [1.5, 2.0]})
+    out = clean(df, clean.numeric("v"))
+    assert as_dict(out)["v"] == [1.5, 2.0]
