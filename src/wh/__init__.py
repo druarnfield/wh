@@ -72,35 +72,48 @@ def push(frame, table, **kwargs):
     return workspace().push(frame, table, **kwargs)
 
 
+def _optional_workspace() -> Workspace | None:
+    """The default workspace, or None when no wh.yaml exists anywhere above
+    cwd. A wh.yaml that exists but fails to PARSE still raises — a broken
+    config must surface, not silently fall back to configless behaviour."""
+    from .config import find_config
+
+    try:
+        find_config()
+    except ConfigError:
+        return None
+    return workspace()
+
+
 def read_excel(path, **kwargs):
     """Smart Excel reader. Works without a wh.yaml unless land= is given."""
-    try:
-        ws = workspace()
-    except ConfigError:
-        if kwargs.get("land") is not None:
-            raise
-        from .frames import default_backend, from_arrow
-        from .sources.excel import read_excel_arrow
+    ws = _optional_workspace()
+    if ws is not None:
+        return ws.read_excel(path, **kwargs)
+    if kwargs.pop("land", None) is not None:
+        raise ConfigError("land= needs a wh.yaml workspace, and none was found")
+    from .frames import default_backend, from_arrow
+    from .sources.excel import read_excel_arrow
 
-        backend = kwargs.pop("backend", None)
-        return from_arrow(
-            read_excel_arrow(path, **kwargs), backend or default_backend()
-        )
-    return ws.read_excel(path, **kwargs)
+    backend = kwargs.pop("backend", None)
+    return from_arrow(read_excel_arrow(path, **kwargs), backend or default_backend())
 
 
 def read_csv(path, **kwargs):
     """DuckDB-sniffed CSV reader. Works without a wh.yaml unless land= is given."""
+    ws = _optional_workspace()
+    if ws is not None:
+        return ws.read_csv(path, **kwargs)
+    if kwargs.pop("land", None) is not None:
+        raise ConfigError("land= needs a wh.yaml workspace, and none was found")
+    import duckdb
+
+    from .errors import WhError as _WhError
+    from .frames import default_backend, from_arrow
+
+    backend = kwargs.pop("backend", None)
     try:
-        ws = workspace()
-    except ConfigError:
-        if kwargs.get("land") is not None:
-            raise
-        import duckdb
-
-        from .frames import default_backend, from_arrow
-
-        backend = kwargs.pop("backend", None)
         rel = duckdb.read_csv(str(path), **kwargs)
-        return from_arrow(rel.to_arrow_table(), backend or default_backend())
-    return ws.read_csv(path, **kwargs)
+    except duckdb.Error as e:
+        raise _WhError(f"could not read CSV {path}: {e}") from e
+    return from_arrow(rel.to_arrow_table(), backend or default_backend())

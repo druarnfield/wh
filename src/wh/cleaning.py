@@ -36,6 +36,8 @@ def snake_names(df: nw.DataFrame) -> nw.DataFrame:
 
 
 def drop_empty(df: nw.DataFrame) -> nw.DataFrame:
+    if len(df) == 0:
+        return df                       # nothing to judge; keep the schema
     keep = [c for c in df.columns if df.get_column(c).null_count() < len(df)]
     df = df.select(keep)
     if df.columns:
@@ -92,8 +94,13 @@ def parse_dates(*cols: str, format: str | None = None):
     return step
 
 
+_NUMERIC_RE = r"^-?(?:\d+\.?\d*|\.\d+)$"
+
+
 def numeric(*cols: str):
-    """Coerce messy string numbers ('1,234', '$5.50', '-', '') to Float64."""
+    """Coerce messy string numbers ('1,234', '$5.50', '-', '') to Float64.
+    Anything that isn't a number after stripping currency symbols/commas
+    ('N/A', 'TBC', ...) becomes null rather than raising."""
 
     def step(df: nw.DataFrame) -> nw.DataFrame:
         exprs = []
@@ -102,9 +109,9 @@ def numeric(*cols: str):
                 continue
             stripped = nw.col(c).str.strip_chars().str.replace_all(r"[$€£,\s]", "")
             exprs.append(
-                nw.when(stripped.is_in(["", "-", "–"]))
-                .then(None)
-                .otherwise(stripped)
+                nw.when(stripped.str.contains(_NUMERIC_RE))
+                .then(stripped)
+                .otherwise(None)
                 .cast(nw.Float64)
                 .alias(c)
             )

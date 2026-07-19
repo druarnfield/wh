@@ -40,7 +40,15 @@ SQL Server. Excel/CSV readers for messy business files. Oracle later.
 - `land=` on readers is raw replace semantics (blank rows included); clean
   first and use `register()`/`push()` if you want cleaned data persisted.
 - Module-level `read_excel`/`read_csv` work with no wh.yaml (frame path only);
-  `land=` without a config raises ConfigError.
+  `land=` without a config raises ConfigError. A wh.yaml that EXISTS but
+  fails to parse always raises — never silently fall back (`_optional_workspace`).
+- header="auto" heuristic caveat: a header row with several unnamed columns
+  can score below a fully-populated all-string data row (ties prefer the
+  earlier row, so this needs strict inequality to bite). The escape hatch is
+  explicit `header=N`; don't try to make the heuristic perfect.
+- `clean.numeric` NULLS anything non-numeric after currency stripping
+  ("N/A", "TBC") by design — strict casting would raise raw backend errors
+  naming the wrong column.
 
 ## Phase 3 notes
 

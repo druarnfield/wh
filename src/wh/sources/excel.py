@@ -55,7 +55,7 @@ def _load_rows(path: Path, sheet) -> list[list[Any]]:
     if sheet is None:
         target = names[0]
     elif isinstance(sheet, int):
-        if sheet >= len(names):
+        if not -len(names) <= sheet < len(names):
             raise WhError(f"sheet index {sheet} out of range ({len(names)} sheets)")
         target = names[sheet]
     else:
@@ -115,6 +115,14 @@ def read_excel_arrow(
     """Read one sheet into an Arrow table. header: "auto" | int | (int, int)
     | None (row indexes are 0-based, counted after skip_rows)."""
     rows = _load_rows(Path(path), sheet)[skip_rows:]
+
+    def _check_row(idx: int) -> None:
+        if not 0 <= idx < len(rows):
+            raise WhError(
+                f"header row {idx} out of range — sheet has {len(rows)} rows "
+                f"(after skip_rows={skip_rows})"
+            )
+
     if header == "auto":
         idx = detect_header(rows)
         header_rows, data = [rows[idx]], rows[idx + 1 :]
@@ -122,8 +130,11 @@ def read_excel_arrow(
         header_rows, data = None, rows
     elif isinstance(header, tuple):
         lo, hi = min(header), max(header)
+        _check_row(lo)
+        _check_row(hi)
         header_rows, data = rows[lo : hi + 1], rows[hi + 1 :]
     else:
+        _check_row(header)
         header_rows, data = [rows[header]], rows[header + 1 :]
 
     ncols = max((len(r) for r in (header_rows or []) + data), default=0)

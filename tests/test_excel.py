@@ -90,6 +90,27 @@ def test_read_excel_dedupes_names(tmp_path):
     assert read_excel_arrow(p).column_names == ["x", "x_2", "col_2"]
 
 
+def test_read_excel_header_out_of_range(messy_xlsx):
+    from wh.errors import WhError
+    from wh.sources.excel import read_excel_arrow
+
+    with pytest.raises(WhError, match="header"):
+        read_excel_arrow(messy_xlsx, header=99)
+    with pytest.raises(WhError, match="header"):
+        read_excel_arrow(messy_xlsx, header=(99, 100))
+    with pytest.raises(WhError, match="header"):
+        read_excel_arrow(messy_xlsx, header=-1)
+
+
+def test_read_excel_negative_sheet_index(messy_xlsx):
+    from wh.errors import WhError
+    from wh.sources.excel import read_excel_arrow
+
+    assert read_excel_arrow(messy_xlsx, sheet=-1, header=None).num_columns == 1
+    with pytest.raises(WhError, match="out of range"):
+        read_excel_arrow(messy_xlsx, sheet=-99)
+
+
 def test_read_excel_missing_file():
     from wh.errors import WhError
     from wh.sources.excel import read_excel_arrow

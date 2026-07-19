@@ -83,3 +83,16 @@ def test_numeric_leaves_numbers(make_frame):
     df = make_frame({"v": [1.5, 2.0]})
     out = clean(df, clean.numeric("v"))
     assert as_dict(out)["v"] == [1.5, 2.0]
+
+
+def test_numeric_nulls_unparseable_tokens(make_frame):
+    df = make_frame({"v": ["N/A", "TBC", "1,234", "n.a.", "-5.5"]})
+    out = clean(df, clean.numeric("v"))
+    assert as_dict(out)["v"] == [None, None, 1234.0, None, -5.5]
+
+
+def test_drop_empty_keeps_schema_on_zero_rows(make_frame):
+    df = make_frame({"a": [1], "b": ["x"]})
+    empty = df.head(0) if isinstance(df, pl.DataFrame) else df.iloc[0:0]
+    out = clean(empty, clean.drop_empty)
+    assert list(as_dict(out)) == ["a", "b"]     # columns survive

@@ -211,9 +211,12 @@ class Workspace:
         con.register("_wh_file_src", obj)
         try:
             con.execute(f"CREATE SCHEMA IF NOT EXISTS {_qi(schema)}")
-            con.execute(
-                f"CREATE OR REPLACE TABLE {qualified} AS SELECT * FROM _wh_file_src"
-            )
+            try:
+                con.execute(
+                    f"CREATE OR REPLACE TABLE {qualified} AS SELECT * FROM _wh_file_src"
+                )
+            except duckdb.Error as e:
+                raise WhError(f"landing '{table}' failed: {e}") from e
         finally:
             con.unregister("_wh_file_src")
         (count,) = con.execute(f"SELECT count(*) FROM {qualified}").fetchone()
@@ -249,10 +252,19 @@ class Workspace:
     ):
         """CSV via DuckDB's sniffing reader; **options pass to read_csv."""
         from .frames import from_arrow
+        from pathlib import Path as _Path
 
-        rel = self.con.read_csv(str(path), **options)
+        if not _Path(path).exists():
+            raise WhError(f"no such file: {path}")
         if land is not None:
+            rel = self.con.read_csv(str(path), **options)
             return self._land_obj(rel, land)
+        # frame-only path sniffs on an in-memory connection so a mere CSV
+        # read never creates/locks the workspace .duckdb file
+        try:
+            rel = duckdb.read_csv(str(path), **options)
+        except duckdb.Error as e:
+            raise WhError(f"could not read CSV {path}: {e}") from e
         return from_arrow(rel.to_arrow_table(), self._backend(backend))
 
     def freshness(self):

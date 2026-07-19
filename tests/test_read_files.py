@@ -59,3 +59,33 @@ def test_module_land_without_config_raises(messy_xlsx, tmp_path, monkeypatch):
 
 def test_clean_exported():
     assert callable(wh.clean) and callable(wh.clean.snake_names)
+
+
+def test_module_reader_propagates_broken_config(messy_xlsx, tmp_path, monkeypatch):
+    # a BROKEN wh.yaml must surface, not silently fall back to configless mode
+    (tmp_path / "wh.yaml").write_text("sources: [unclosed")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(wh, "_default", None)
+    with pytest.raises(wh.ConfigError, match="invalid YAML"):
+        wh.read_excel(messy_xlsx)
+
+
+def test_module_reader_explicit_land_none_configless(messy_xlsx, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(wh, "_default", None)
+    df = wh.read_excel(messy_xlsx, land=None)     # explicit None = frame path
+    assert df["UR"].to_list() == ["A1", "A2"]
+
+
+def test_workspace_read_csv_frame_path_leaves_no_db(project, tmp_path):
+    p = tmp_path / "d.csv"
+    p.write_text("a\n1\n")
+    ws = Workspace.load(project / "wh.yaml")
+    ws.read_csv(p)
+    assert not (project / "metrics.duckdb").exists()   # sniffing is in-memory
+
+
+def test_read_csv_missing_file_is_friendly(project):
+    ws = Workspace.load(project / "wh.yaml")
+    with pytest.raises(wh.WhError, match="no such file"):
+        ws.read_csv(project / "nope.csv")
