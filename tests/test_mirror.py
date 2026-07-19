@@ -35,3 +35,32 @@ def test_staging_cleaned_up(tmp_path):
     cfg = make_config(tmp_path, [make_spec("t1")])
     build(cfg, fake_extract({"t1": {"a": [1]}}), log=lambda s: None)
     assert not (tmp_path / ".mirror_staging").exists()
+
+
+def test_parquet_mode_creates_file_and_view(tmp_path):
+    cfg = make_config(tmp_path, [make_spec("t2", mode="parquet")])
+    build(cfg, fake_extract({"t2": {"b": ["x", "y"]}}), log=lambda s: None)
+
+    pq = cfg.parquet_dir / "main" / "t2.parquet"
+    assert pq.exists()
+    assert q(cfg, 'SELECT b FROM "main"."t2" ORDER BY b') == [("x",), ("y",)]
+    assert q(cfg, "SELECT mode, row_count FROM _mirror.meta") == [("parquet", 2)]
+
+
+def test_failed_build_leaves_live_mirror_untouched(tmp_path):
+    cfg = make_config(tmp_path, [make_spec("t1"), make_spec("t2")])
+    build(cfg, fake_extract({"t1": {"a": [1]}, "t2": {"a": [2]}}), log=lambda s: None)
+
+    def exploding(spec):
+        if spec.name == "t2":
+            raise RuntimeError("warehouse hiccup")
+        import pyarrow as pa
+        return pa.table({"a": [99]})
+
+    with pytest.raises(RuntimeError):
+        build(cfg, exploding, log=lambda s: None)
+
+    # old data still intact, staging cleaned up
+    assert q(cfg, 'SELECT a FROM "main"."t1"') == [(1,)]
+    assert q(cfg, 'SELECT a FROM "main"."t2"') == [(2,)]
+    assert not (tmp_path / ".mirror_staging").exists()
