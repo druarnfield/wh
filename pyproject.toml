@@ -1,7 +1,7 @@
 [project]
-name = "warehouse-mirror"
+name = "warehouse-tools"
 version = "0.1.0"
-description = "Add your description here"
+description = "Helpers for mirroring warehouse data into DuckDB and pushing results back"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
@@ -10,3 +10,16 @@ dependencies = [
     "pyarrow>=25.0.0",
     "pyyaml>=6.0.3",
 ]
+
+[project.scripts]
+wh = "wh.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.9"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "wh"
+
+[dependency-groups]
+dev = ["pytest>=8"]
