@@ -60,6 +60,18 @@ def test_only_without_existing_mirror_is_full_build(tmp_path):
     assert q(cfg, 'SELECT a FROM "main"."t2"') == [(2,)]
 
 
+def test_only_works_when_db_named_prev(tmp_path):
+    # the staging db's catalog name comes from the file stem; the carry-over
+    # ATTACH alias must not collide with it
+    cfg = make_config(tmp_path, [make_spec("t1"), make_spec("t2")])
+    cfg.duckdb_path = tmp_path / "prev.duckdb"
+    build(cfg, fake_extract({"t1": {"a": [1]}, "t2": {"a": [10]}}), log=lambda s: None)
+
+    build(cfg, fake_extract({"t1": {"a": [2]}}), only=["t1"], log=lambda s: None)
+
+    assert q(cfg, 'SELECT a FROM "main"."t2"') == [(10,)]
+
+
 def test_only_unknown_name_raises(tmp_path):
     cfg = make_config(tmp_path, [make_spec("t1")])
     with pytest.raises(ConfigError, match="nope"):
