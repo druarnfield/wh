@@ -1638,6 +1638,20 @@ git commit -m "feat: migrate repo to wh package (wh.yaml, docs, remove POC)"
 
 ---
 
+## Amendments (post-review, 2026-07-19)
+
+Code review after execution found the plan's `build()` broke its own atomicity
+invariant: phase 2 deleted the `.old` parquet backup before phases 3–4, so a
+failure during the final `os.replace` (e.g. live db locked on Windows) left
+the old db serving the new parquet files. **The implemented code deviates from
+the plan here on purpose:** the old parquet dir is kept until the db swap
+succeeds, and any failure after the swap rolls the parquet dir back. Locked in
+by `test_failure_during_db_swap_restores_live_parquet`. Additional post-review
+hardening: config read/parse errors wrapped in `ConfigError`, friendly
+`freshness()` before first mirror, `_wh_prev` attach alias (a mirror named
+`prev.duckdb` collided), compression validated at parse time, CLI mirror
+wiring test.
+
 ## Done — phase 1 acceptance
 
 - `import wh; wh.connect()` works from any subdir of a project with wh.yaml
