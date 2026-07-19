@@ -44,9 +44,12 @@ SQL Server. Excel/CSV readers for messy business files. Oracle later.
   `test_join_dimension_query` is strict-xfail and will flag the fixing
   release. File the upstream issues (join bug; raw-column error messages;
   case-only rename bug below).
-- Case-only renames (dim `specialty` over `_.Specialty`) break BSL/ibis
-  execution with obscure schema errors — `merge_model_files` lints and
-  refuses them. Keep exact column case or a genuinely different name.
+- Case-only NAME collisions break BSL/ibis execution with obscure schema
+  errors — and it's broader than renames: any dim/measure name colliding
+  case-insensitively with ANY table column (even computed exprs). Two
+  guards: `merge_model_files` lints simple `_.Col` renames (no binding
+  needed), `_check_name_collisions` covers everything at bind time with
+  real columns in hand. Keep exact column case or a genuinely different name.
 - Caches are SELF-KEYING on connection/backend object identity (`ws.con is
   cached_con`). Never add invalidation hooks — they miss reopen paths.
 - Module `semantics.py` vs verbs `models/model/frame`; `frames.py` module

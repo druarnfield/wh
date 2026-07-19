@@ -57,9 +57,13 @@ def merge_model_files(directory: Path) -> tuple[dict, dict]:
                 raise SemanticsError(
                     f"model '{name}' defined in both {origins[name]} and {f.name}"
                 )
-            if not isinstance(spec, dict) or not spec.get("table"):
+            if (
+                not isinstance(spec, dict)
+                or not spec.get("table")
+                or not isinstance(spec.get("table"), str)
+            ):
                 raise SemanticsError(
-                    f"{f.name}: model '{name}' needs a 'table:' key"
+                    f"{f.name}: model '{name}' needs a 'table:' key (a string)"
                 )
             _lint_case_only_renames(f.name, name, spec)
             merged[name] = spec
@@ -72,17 +76,25 @@ def _import_bsl():
         import boring_semantic_layer as bsl
         import ibis
     except ImportError as e:
+        if e.name in ("boring_semantic_layer", "ibis"):
+            raise SemanticsError(
+                "semantic models need the semantics extra — "
+                "uv add 'warehouse-tools[semantics]'"
+            ) from e
         raise SemanticsError(
-            "semantic models need the semantics extra — "
-            "uv add 'warehouse-tools[semantics]'"
+            f"semantics import failed ({e}) — the [semantics] extra may be broken"
         ) from e
     return bsl, ibis
 
 
 def _resolve_table(backend, ref: str):
+    from .errors import WhError
     from .workspace import _split_table
 
-    schema, name = _split_table(ref)
+    try:
+        schema, name = _split_table(ref)
+    except WhError as e:
+        raise SemanticsError(f"invalid table reference '{ref}': {e}") from e
     try:
         return backend.table(name, database=schema)
     except Exception as e:
@@ -94,6 +106,25 @@ def _resolve_table(backend, ref: str):
         raise SemanticsError(
             f"model table '{ref}' not found in the mirror (available: {available})"
         ) from e
+
+
+def _check_name_collisions(origin: str, model: str, spec: dict, columns) -> None:
+    """Bind-time superset of the YAML lint: ANY declared dim/measure name
+    that collides case-insensitively with a table column (without matching
+    it exactly) breaks BSL/ibis execution — verified upstream bug."""
+    by_lower = {}
+    for c in columns:
+        by_lower.setdefault(c.lower(), c)
+    for section in ("dimensions", "measures"):
+        for name in (spec.get(section) or {}):
+            col = by_lower.get(str(name).lower())
+            if col is not None and col != name:
+                raise SemanticsError(
+                    f"{origin}: model '{model}': '{name}' collides with column "
+                    f"'{col}' only by case — this breaks query execution "
+                    f"upstream. Use the exact column case ('{col}') or a "
+                    f"genuinely different name."
+                )
 
 
 def validate_semantics(cfg) -> str | None:
@@ -115,11 +146,18 @@ def validate_semantics(cfg) -> str | None:
     plural = "s" if n != 1 else ""
     if not cfg.duckdb_path.exists():
         return f"OK: {n} semantic model{plural} (structure only — no mirror to bind)"
+    import duckdb
+
     from .workspace import Workspace
 
     ws = Workspace(cfg)
     try:
         models = ws.models(reload=True)  # full bind
+    except duckdb.Error as e:
+        raise SemanticsError(
+            f"could not open the mirror to bind models: {e} — close open "
+            f"notebook sessions holding {cfg.duckdb_path} and retry"
+        ) from e
     finally:
         ws.close()
     return f"OK: {len(models)} semantic model{plural} bound"
@@ -128,11 +166,16 @@ def validate_semantics(cfg) -> str | None:
 def load_models(directory: Path, backend) -> dict:
     """Merge all model files and bind them in ONE from_config call."""
     bsl, _ibis = _import_bsl()
-    merged, _origins = merge_model_files(directory)
+    merged, origins = merge_model_files(directory)
     if not merged:
         return {}
-    tables = {
-        spec["table"]: _resolve_table(backend, spec["table"])
-        for spec in merged.values()
-    }
+    tables: dict = {}
+    for mname, spec in merged.items():
+        ref = spec["table"]
+        if ref not in tables:
+            try:
+                tables[ref] = _resolve_table(backend, ref)
+            except SemanticsError as e:
+                raise SemanticsError(f"{origins[mname]}: model '{mname}': {e}") from e
+        _check_name_collisions(origins[mname], mname, spec, tables[ref].columns)
     return dict(bsl.from_config(merged, tables=tables))

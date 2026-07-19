@@ -50,6 +50,70 @@ def test_merge_empty_dir(tmp_path):
     assert merge_model_files(d) == ({}, {})
 
 
+def test_merge_rejects_non_string_table(tmp_path):
+    d = write_models(tmp_path / "s", {"a.yml": "m:\n  table: 2024\n"})
+    with pytest.raises(SemanticsError, match="table"):
+        merge_model_files(d)
+
+
+def test_bind_rejects_case_colliding_names(semantic_project):
+    # broader than the YAML lint: ANY dim/measure name that collides
+    # case-insensitively with a table column breaks execution upstream,
+    # even for computed exprs — caught at bind time with columns in hand
+    from wh.workspace import Workspace
+
+    (semantic_project / "semantics" / "computed.yml").write_text(
+        "computed:\n"
+        "  table: waitlist\n"
+        "  dimensions:\n"
+        "    SPECIALTY: _.specialty.upper()\n"     # computed; name collides
+        "  measures:\n"
+        "    n: _.count()\n"
+    )
+    ws = Workspace.load(semantic_project / "wh.yaml")
+    with pytest.raises(SemanticsError, match="only by case"):
+        ws.models()
+
+
+def test_validate_mirror_locked_is_friendly(semantic_project, capsys):
+    import duckdb
+
+    from wh.cli import main
+
+    # read-only handle in-process forces the rw bind connection to fail with
+    # duckdb's mixed-configuration ConnectionException — same class of raw
+    # error as a cross-process file lock
+    blocker = duckdb.connect(str(semantic_project / "metrics.duckdb"), read_only=True)
+    try:
+        assert main(["validate", "--config", str(semantic_project / "wh.yaml")]) == 2
+        assert "error:" in capsys.readouterr().err
+    finally:
+        blocker.close()
+
+
+def test_missing_extra_real_import_error(semantic_project, monkeypatch):
+    import sys
+
+    from wh.workspace import Workspace
+
+    monkeypatch.setitem(sys.modules, "boring_semantic_layer", None)
+    ws = Workspace.load(semantic_project / "wh.yaml")
+    with pytest.raises(SemanticsError, match=r"warehouse-tools\[semantics\]"):
+        ws.models()
+
+
+def test_module_level_semantics_verbs(semantic_project, monkeypatch):
+    import polars as pl
+
+    import wh
+
+    monkeypatch.chdir(semantic_project)
+    monkeypatch.setattr(wh, "_default", None)
+    assert set(wh.models()) == {"waitlist", "clinics"}
+    q = wh.model("waitlist").group_by("specialty").aggregate("patients_waiting")
+    assert isinstance(wh.frame(q), pl.DataFrame)
+
+
 def test_merge_rejects_case_only_renames(tmp_path):
     # verified upstream bug (BSL 0.3.15/ibis 12): a dim named 'specialty'
     # over column _.Specialty breaks both to_pyarrow() and execute() with

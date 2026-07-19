@@ -15,7 +15,9 @@ def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="wh", description="DuckDB warehouse tools")
     sub = p.add_subparsers(dest="command", required=True)
 
-    pv = sub.add_parser("validate", help="parse the config and exit")
+    pv = sub.add_parser(
+        "validate", help="check the config and semantic models, then exit"
+    )
     pv.add_argument("--config", type=Path, help="path to wh.yaml (default: discover)")
 
     pm = sub.add_parser("mirror", help="refresh the local mirror")

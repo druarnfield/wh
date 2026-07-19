@@ -16,7 +16,7 @@ dependencies = [
 excel = ["python-calamine>=0.5"]
 semantics = [
     "boring-semantic-layer>=0.3.15,<0.4",
-    "ibis-framework[duckdb]>=10",
+    "ibis-framework[duckdb]>=12",
 ]
 
 [project.scripts]
