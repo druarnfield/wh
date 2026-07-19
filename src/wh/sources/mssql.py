@@ -6,6 +6,24 @@ from ..config import DEFAULT_BATCH_SIZE, Source, TableSpec
 from ..errors import SourceError
 
 
+def open_connection(source: Source):
+    """DB-API connection to a configured source (shared by extract and push)."""
+    try:
+        import mssql_python
+    except ImportError as e:
+        raise SourceError(
+            "mssql-python is not installed (uv add mssql-python)"
+        ) from e
+    try:
+        return mssql_python.connect(source.connection_string())
+    except SourceError:
+        raise
+    except Exception as e:
+        raise SourceError(
+            f"could not connect to source '{source.name}': {e}"
+        ) from e
+
+
 class MssqlExtractor:
     """Implements the mirror extract seam: extractor(spec) -> Arrow.
 
@@ -14,20 +32,7 @@ class MssqlExtractor:
     """
 
     def __init__(self, source: Source):
-        try:
-            import mssql_python
-        except ImportError as e:
-            raise SourceError(
-                "mssql-python is not installed (uv add mssql-python)"
-            ) from e
-        try:
-            self._conn = mssql_python.connect(source.connection_string())
-        except SourceError:
-            raise
-        except Exception as e:
-            raise SourceError(
-                f"could not connect to source '{source.name}': {e}"
-            ) from e
+        self._conn = open_connection(source)
         self._cursor = None
 
     def query(self, sql: str, batch_size: int = DEFAULT_BATCH_SIZE):

@@ -161,6 +161,32 @@ class Workspace:
         (count,) = con.execute(f"SELECT count(*) FROM {qualified}").fetchone()
         return count
 
+    def push(
+        self,
+        frame,
+        table: str,
+        *,
+        source: str | None = None,
+        if_exists: str = "fail",
+    ) -> int:
+        """Publish a dataframe/relation to SQL Server. Allowlist-gated.
+
+        `table` is 'Database.schema.table'. if_exists: 'fail' | 'replace'."""
+        from .frames import to_arrow
+        from .push import check_allowed, parse_target, push_arrow
+        from .sources.mssql import open_connection
+
+        database, schema, name = parse_target(table)
+        check_allowed(database, schema, self.config.push_allow)
+        arrow = to_arrow(frame)
+        conn = open_connection(self._source(source))
+        try:
+            return push_arrow(
+                conn, database, schema, name, arrow, if_exists=if_exists
+            )
+        finally:
+            conn.close()
+
     def register(self, frame, name: str) -> None:
         """Make any dataframe queryable (as `name`) on the session connection."""
         from .frames import to_arrow

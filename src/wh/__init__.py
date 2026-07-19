@@ -19,7 +19,7 @@ from .workspace import Workspace
 
 __all__ = [
     "Workspace", "workspace", "connect", "mirror", "freshness",
-    "pull", "land", "register",
+    "pull", "land", "register", "push",
     "WhError", "ConfigError", "SourceError", "PushRefused", "SchemaMismatch",
 ]
 
@@ -58,3 +58,7 @@ def pull(sql, **kwargs):
 
 def land(sql, table, **kwargs):
     return workspace().land(sql, table, **kwargs)
+
+
+def push(frame, table, **kwargs):
+    return workspace().push(frame, table, **kwargs)

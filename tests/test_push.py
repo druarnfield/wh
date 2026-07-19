@@ -147,6 +147,37 @@ def test_push_arrow_empty_table_creates_no_insert():
     assert conn.commits == 1
 
 
+def test_workspace_push_checks_allowlist_before_connecting(project, monkeypatch):
+    import polars as pl
+    import wh.sources.mssql as mssql_mod
+    from wh.workspace import Workspace
+
+    def no_connect(source):
+        raise AssertionError("must refuse before opening a connection")
+
+    monkeypatch.setattr(mssql_mod, "open_connection", no_connect)
+    ws = Workspace.load(project / "wh.yaml")   # project fixture has no push.allow
+    with pytest.raises(PushRefused, match="push.allow"):
+        ws.push(pl.DataFrame({"a": [1]}), "Sandbox.dbo.res")
+
+
+def test_workspace_push_happy_path(project, monkeypatch):
+    import polars as pl
+    import yaml
+    import wh.sources.mssql as mssql_mod
+    from wh.workspace import Workspace
+
+    cfg = yaml.safe_load((project / "wh.yaml").read_text())
+    cfg["push"] = {"allow": ["Sandbox.dbo"]}
+    (project / "wh.yaml").write_text(yaml.safe_dump(cfg, sort_keys=False))
+
+    conn = FakeConn(table_exists=False)
+    monkeypatch.setattr(mssql_mod, "open_connection", lambda source: conn)
+    ws = Workspace.load(project / "wh.yaml")
+    assert ws.push(pl.DataFrame({"a": [1, 2, 3]}), "Sandbox.dbo.res") == 3
+    assert conn.commits == 1
+
+
 def test_push_arrow_rolls_back_on_error():
     from wh.push import push_arrow
 
