@@ -212,3 +212,16 @@ def load_config(path: Path | str) -> Config:
         parquet_dir=parquet_dir,
         tables=tables,
     )
+
+
+def find_config(start: Path | None = None) -> Path:
+    """Walk up from `start` (default cwd) looking for wh.yaml."""
+    cur = (start or Path.cwd()).resolve()
+    for p in (cur, *cur.parents):
+        candidate = p / "wh.yaml"
+        if candidate.is_file():
+            return candidate
+    raise ConfigError(
+        f"no wh.yaml found in {cur} or any parent directory "
+        f"(create one, or pass an explicit path)"
+    )
