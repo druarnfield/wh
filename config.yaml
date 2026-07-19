@@ -1,0 +1,36 @@
+# mirror.py configuration
+# Connection string is read from the env var named below, e.g.
+#   export MSSQL_DSN="Server=myserver;Database=Reporting;Trusted_Connection=yes;"
+source:
+  dsn_env: MSSQL_DSN
+
+destination:
+  duckdb_path: ./metrics.duckdb
+  parquet_dir: ./parquet # only used by parquet-mode tables
+
+defaults:
+  mode: native # native | parquet
+  schema_in_duckdb: core
+  compression: zstd
+  compression_level: 9
+  batch_size: 100000 # arrow_reader batch size
+
+tables:
+  # Whole-table mirror of a curated SQL Server object
+  - name: outpatient_waitlist_current
+    description: "Current Outpatient Waitlist"
+    schema_in_duckdb: main
+    source:
+      database: ExecReporting
+      schema: dbo
+      table: OutpatientWaitsCurrent
+
+  # Query-defined extract
+  - name: outpatient_waitlist_snapshot
+    description: "Daily waitlist snapshot, last 3 years only"
+    schema_in_duckdb: main
+    source:
+      query: >
+        SELECT * FROM [ExecReporting].[dbo].[OutpatientWaitsPatientLevel]
+    extract:
+      batch-size: 100000
