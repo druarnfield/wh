@@ -1,4 +1,5 @@
 import duckdb
+import pytest
 
 import wh
 from wh.workspace import Workspace
@@ -48,3 +49,16 @@ def test_freshness(project):
     fresh = ws.freshness()
     assert fresh.num_rows == 1
     assert "extracted_at" in fresh.column_names
+
+
+def test_freshness_before_any_mirror_is_friendly(project):
+    ws = Workspace.load(project / "wh.yaml")
+    with pytest.raises(wh.WhError, match="run wh.mirror"):
+        ws.freshness()
+
+
+def test_freshness_on_empty_db_from_connect_is_friendly(project):
+    ws = Workspace.load(project / "wh.yaml")
+    ws.connect().close()  # creates an empty .duckdb with no _mirror.meta
+    with pytest.raises(wh.WhError, match="run wh.mirror"):
+        ws.freshness()

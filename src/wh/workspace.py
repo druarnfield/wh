@@ -7,6 +7,9 @@ from pathlib import Path
 import duckdb
 
 from .config import Config, find_config, load_config
+from .errors import WhError
+# NOTE: must be `from .mirror import ...` — `from . import mirror` returns the
+# wh.mirror() FUNCTION defined in __init__.py, which shadows this module.
 from .mirror import build as _build
 
 
@@ -54,6 +57,10 @@ class Workspace:
 
     def freshness(self):
         """One row per mirrored table: mode, row_count, extracted_at, duration_s."""
+        if not self.config.duckdb_path.exists():
+            raise WhError(
+                f"no mirror at {self.config.duckdb_path} — run wh.mirror() first"
+            )
         con = self.connect(read_only=True)
         try:
             return con.execute(
@@ -61,5 +68,9 @@ class Workspace:
                 "extracted_at, duration_s "
                 "FROM _mirror.meta ORDER BY schema_name, table_name"
             ).to_arrow_table()
+        except duckdb.CatalogException as e:
+            raise WhError(
+                "this database has no mirror metadata — run wh.mirror() first"
+            ) from e
         finally:
             con.close()

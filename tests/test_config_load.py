@@ -90,3 +90,26 @@ def test_no_tables_raises(tmp_path):
     bad = {**VALID, "tables": []}
     with pytest.raises(ConfigError, match="no tables"):
         load_config(write(tmp_path, bad))
+
+
+def test_missing_file_raises_configerror(tmp_path):
+    with pytest.raises(ConfigError, match="cannot read"):
+        load_config(tmp_path / "nope" / "wh.yaml")
+
+
+def test_malformed_yaml_raises_configerror(tmp_path):
+    p = tmp_path / "wh.yaml"
+    p.write_text("sources: [unclosed")
+    with pytest.raises(ConfigError, match="invalid YAML"):
+        load_config(p)
+
+
+def test_bad_compression_raises(tmp_path):
+    bad = dict(VALID)
+    bad["tables"] = [{
+        "name": "x",
+        "compression": "zstandard",  # typo for zstd
+        "source": {"query": "SELECT 1"},
+    }]
+    with pytest.raises(ConfigError, match="compression"):
+        load_config(write(tmp_path, bad))

@@ -13,6 +13,9 @@ from .errors import ConfigError
 DEFAULT_BATCH_SIZE = 100_000
 VALID_MODES = {"native", "parquet"}
 VALID_DRIVERS = {"mssql"}
+# codecs DuckDB's parquet COPY accepts; checked at parse time so a typo
+# fails `wh validate` instead of dying mid-build
+VALID_COMPRESSION = {"uncompressed", "snappy", "gzip", "zstd", "brotli", "lz4", "lz4_raw"}
 
 
 @dataclass
@@ -143,8 +146,13 @@ def _parse_source(name: str, raw: dict) -> Source:
 
 def load_config(path: Path | str) -> Config:
     path = Path(path).resolve()
-    with open(path) as f:
-        raw = yaml.safe_load(f)
+    try:
+        with open(path) as f:
+            raw = yaml.safe_load(f)
+    except OSError as e:
+        raise ConfigError(f"cannot read config {path}: {e}") from e
+    except yaml.YAMLError as e:
+        raise ConfigError(f"invalid YAML in {path}: {e}") from e
     if not isinstance(raw, dict):
         raise ConfigError("config root must be a mapping")
     base = path.parent
@@ -185,6 +193,11 @@ def load_config(path: Path | str) -> Config:
         mode = t.get("mode", default_mode)
         if mode not in VALID_MODES:
             raise ConfigError(f"table '{name}': mode must be one of {sorted(VALID_MODES)}")
+        compression = str(t.get("compression", dfl.get("compression", "zstd"))).lower()
+        if compression not in VALID_COMPRESSION:
+            raise ConfigError(
+                f"table '{name}': compression must be one of {sorted(VALID_COMPRESSION)}"
+            )
         extract = t.get("extract") or {}
         spec = TableSpec(
             name=name,
@@ -192,7 +205,7 @@ def load_config(path: Path | str) -> Config:
             schema_in_duckdb=t.get("schema_in_duckdb", dfl.get("schema_in_duckdb", "main")),
             description=t.get("description"),
             mode=mode,
-            compression=t.get("compression", dfl.get("compression", "zstd")),
+            compression=compression,
             compression_level=int(t.get("compression_level", dfl.get("compression_level", 9))),
             batch_size=int(extract.get("batch_size", dfl.get("batch_size", DEFAULT_BATCH_SIZE))),
         )
