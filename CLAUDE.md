@@ -59,7 +59,7 @@ SQL Server. Excel/CSV readers for messy business files. Oracle later.
 - `push_arrow()` takes ANY DB-API connection (that's the unit-test seam);
   allowlist is checked in `Workspace.push()` BEFORE a connection is opened.
 - `attatch.sql` / `start.sql` at repo root are the user's own scratch files —
-  leave them alone.
+  untracked and gitignored on purpose; leave them alone.
 
 ## Key documents
 

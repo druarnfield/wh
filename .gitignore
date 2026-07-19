@@ -14,3 +14,7 @@ wheels/
 *.duckdb.wal
 parquet/
 .mirror_staging/
+
+# Scratch SQL files (local only)
+attatch.sql
+start.sql
