@@ -12,10 +12,42 @@ def test_load_explicit_path(project):
 
 def test_connect_creates_and_queries(project):
     ws = Workspace.load(project / "wh.yaml")
-    con = ws.connect()
+    con = ws.connect(fresh=True)
     assert con.execute("SELECT 42").fetchone() == (42,)
     con.close()
     assert (project / "metrics.duckdb").exists()
+
+
+def test_shared_connection_is_cached(project):
+    ws = Workspace.load(project / "wh.yaml")
+    assert ws.con is ws.con
+    assert ws.connect() is ws.con          # default connect() = the session con
+
+
+def test_connect_fresh_is_independent(project):
+    ws = Workspace.load(project / "wh.yaml")
+    fresh = ws.connect(fresh=True)
+    assert fresh is not ws.con
+    fresh.close()
+
+
+def test_freshness_works_while_rw_connection_open(project):
+    # regression: read_only + rw on one file in-process is a DuckDB error
+    import pyarrow as pa
+    ws = Workspace.load(project / "wh.yaml")
+    ws.mirror(extract=lambda spec: pa.table({"a": [1]}), log=lambda s: None)
+    con = ws.con                            # hold a live rw connection
+    assert ws.freshness().num_rows == 1
+    assert con.execute("SELECT 1").fetchone() == (1,)
+
+
+def test_mirror_reopens_shared_connection(project):
+    import pyarrow as pa
+    ws = Workspace.load(project / "wh.yaml")
+    ws.mirror(extract=lambda spec: pa.table({"a": [1]}), log=lambda s: None)
+    _ = ws.con
+    ws.mirror(extract=lambda spec: pa.table({"a": [2]}), log=lambda s: None)
+    assert ws.con.execute('SELECT a FROM "main"."t1"').fetchall() == [(2,)]
 
 
 def test_module_level_uses_discovery(project, monkeypatch):
@@ -25,7 +57,6 @@ def test_module_level_uses_discovery(project, monkeypatch):
     monkeypatch.setattr(wh, "_default", None)  # reset the lazy singleton
     con = wh.connect()
     assert con.execute("SELECT 1").fetchone() == (1,)
-    con.close()
 
 
 def test_module_workspace_explicit_path_bypasses_singleton(project):

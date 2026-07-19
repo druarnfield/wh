@@ -16,16 +16,47 @@ from .mirror import build as _build
 class Workspace:
     def __init__(self, config: Config):
         self.config = config
+        self._con: duckdb.DuckDBPyConnection | None = None
 
     @classmethod
     def load(cls, path: str | Path | None = None) -> "Workspace":
         cfg_path = Path(path) if path is not None else find_config()
         return cls(load_config(cfg_path))
 
-    def connect(self, read_only: bool = False) -> duckdb.DuckDBPyConnection:
-        """Connection to the local mirror. Pass read_only=True when several
-        notebooks share the file."""
-        return duckdb.connect(str(self.config.duckdb_path), read_only=read_only)
+    @property
+    def con(self) -> duckdb.DuckDBPyConnection:
+        """The shared session connection (read-write, created lazily).
+
+        One process must not mix read-only and read-write connections to the
+        same DuckDB file, so everything in-process shares this one.
+        """
+        if self._con is not None:
+            try:
+                self._con.execute("SELECT 1")
+            except duckdb.Error:
+                self._con = None                    # was closed; reopen
+        if self._con is None:
+            self._con = duckdb.connect(str(self.config.duckdb_path))
+        return self._con
+
+    def connect(
+        self, *, fresh: bool = False, read_only: bool = False
+    ) -> duckdb.DuckDBPyConnection:
+        """The session connection — hand it to marimo/jupyter.
+
+        fresh=True returns an independent read-write connection you own.
+        read_only=True implies fresh; only useful from OTHER processes —
+        it fails if this process already holds a write connection."""
+        if read_only:
+            return duckdb.connect(str(self.config.duckdb_path), read_only=True)
+        if fresh:
+            return duckdb.connect(str(self.config.duckdb_path))
+        return self.con
+
+    def close(self) -> None:
+        if self._con is not None:
+            self._con.close()
+            self._con = None
 
     def mirror(
         self,
@@ -37,6 +68,9 @@ class Workspace:
     ) -> None:
         """Refresh the local mirror. `extract` is injectable for tests;
         default is the mssql extractor for the config's default source."""
+        # the swap replaces the db file; the old session handle would keep
+        # serving the pre-refresh data, so drop it and reopen lazily
+        self.close()
         if extract is None:
             from .sources.mssql import MssqlExtractor
 
@@ -61,9 +95,8 @@ class Workspace:
             raise WhError(
                 f"no mirror at {self.config.duckdb_path} — run wh.mirror() first"
             )
-        con = self.connect(read_only=True)
         try:
-            return con.execute(
+            return self.con.execute(
                 "SELECT schema_name, table_name, mode, row_count, "
                 "extracted_at, duration_s "
                 "FROM _mirror.meta ORDER BY schema_name, table_name"
@@ -72,5 +105,3 @@ class Workspace:
             raise WhError(
                 "this database has no mirror metadata — run wh.mirror() first"
             ) from e
-        finally:
-            con.close()
