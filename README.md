@@ -7,15 +7,26 @@ default — five verbs that just work — with overrides for everything else.
 ```python
 import wh
 
-con = wh.connect()      # duckdb connection to the local mirror
+con = wh.connect()      # session duckdb connection to the local mirror
 wh.mirror()             # refresh the mirror from the warehouse
 wh.freshness()          # how stale is each table?
 
+df = wh.pull("SELECT ...")                    # ad-hoc warehouse query -> frame
+wh.pull("SELECT ...", backend="pandas")       # or pick the frame library
+wh.land("SELECT ...", table="scratch.raw")    # big pulls: stream into the .duckdb
+wh.register(df, "cohort")                     # any frame queryable in SQL:
+con.sql("SELECT * FROM cohort JOIN main.waitlist USING (ur)")
+
 # coming in later phases:
-df = wh.pull("SELECT ...")               # ad-hoc warehouse query -> dataframe
 wh.push(df, "Sandbox.dbo.results")       # publish results back
 df = wh.read_excel("messy.xlsx")         # smart Excel reader
 ```
+
+`pull()` returns polars if installed (else pandas, else pyarrow); set
+`defaults.frames` in `wh.yaml` to pin it. `wh.connect()` returns a shared
+session connection — DuckDB forbids mixing read-only and read-write
+connections to one file in a process, so don't open your own read-only ones;
+`wh.connect(fresh=True)` gives an independent read-write connection.
 
 ## Install
 

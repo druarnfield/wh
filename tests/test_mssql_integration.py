@@ -8,6 +8,26 @@ pytestmark = pytest.mark.skipif(
 )
 
 
+def test_pull_and_land_roundtrip(tmp_path):
+    import yaml
+    import wh
+
+    cfg = {
+        "sources": {"warehouse": {"driver": "mssql", "dsn_env": "WH_TEST_DSN"}},
+        "destination": {"duckdb_path": "./t.duckdb"},
+        "tables": [{"name": "x", "source": {"query": "SELECT 1 AS a"}}],
+    }
+    (tmp_path / "wh.yaml").write_text(yaml.safe_dump(cfg, sort_keys=False))
+    ws = wh.workspace(tmp_path / "wh.yaml")
+
+    df = ws.pull("SELECT 2 + 2 AS four")
+    assert df["four"].to_list() == [4]
+
+    assert ws.land("SELECT 1 AS n UNION ALL SELECT 2", table="scratch.nums") == 2
+    assert ws.con.execute('SELECT sum(n) FROM "scratch"."nums"').fetchone() == (3,)
+    ws.close()
+
+
 def test_extract_roundtrip(tmp_path):
     from wh.config import Source, SourceRef, TableSpec
     from wh.sources.mssql import MssqlExtractor

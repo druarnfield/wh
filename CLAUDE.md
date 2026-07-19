@@ -13,9 +13,13 @@ SQL Server. Excel/CSV readers for messy business files. Oracle later.
 
 - Phase 1 COMPLETE (2026-07-19): `src/wh/` package with config/discovery,
   Workspace, connect/mirror/freshness, carry-over `--only`, `_mirror.meta`,
-  MssqlExtractor, CLI. Verified end-to-end against the local dev server.
-- Next: phase 2 (`pull()` / `land()` / `register()` + narwhals boundary) —
-  needs its own plan, written against the design doc.
+  MssqlExtractor, CLI. Post-review hardening applied (see phase 1 plan
+  amendments). Verified end-to-end against the local dev server.
+- Phase 2 COMPLETE (2026-07-19): `pull()` / `land()` / `register()`, narwhals
+  frame boundary (`frames.py`), `defaults.frames` config, shared session
+  connection (`ws.con`), `MssqlExtractor.query()`. Plan:
+  `docs/plans/2026-07-19-warehouse-tools-phase2.md`.
+- Next: phase 3 (`push()` with schema allowlist) — needs its own plan.
 - `attatch.sql` / `start.sql` at repo root are the user's own scratch files —
   leave them alone.
 
@@ -45,6 +49,18 @@ SQL Server. Excel/CSV readers for messy business files. Oracle later.
   must dump with `sort_keys=False`.
 - Bash: `pytest | tail` swallows pytest's exit code; `set -o pipefail` before
   chaining `&& git commit`.
+
+## Gotchas learned in phase 2
+
+- DuckDB refuses read-only + read-write connections to the same file in one
+  process ("different configuration" ConnectionException). Hence the shared
+  session connection `ws.con`; NEVER `connect(read_only=True)` in-process.
+  Second read-write connection is fine (`connect(fresh=True)`).
+- `ws.mirror()` closes the session connection before the swap (old handle
+  would serve pre-refresh data); it reopens lazily on next `ws.con` access.
+- `land()` registers the streaming Arrow reader directly with DuckDB
+  (constant memory); `pull()` materialises. Don't "simplify" land through
+  `frames.to_arrow` — that would read everything into RAM.
 
 ## Architecture (see design doc for full detail)
 
