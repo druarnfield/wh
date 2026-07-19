@@ -76,3 +76,58 @@ def sql_type(field: pa.Field) -> str:
     raise WhError(
         f"column '{field.name}': cannot push arrow type {t} to SQL Server"
     )
+
+
+_EXISTS_SQL = (
+    "SELECT count(*) FROM {db}.INFORMATION_SCHEMA.TABLES "
+    "WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?"
+)
+
+
+def push_arrow(
+    conn,
+    database: str,
+    schema: str,
+    name: str,
+    table: pa.Table,
+    *,
+    if_exists: str = "fail",
+    batch_size: int = 5_000,
+) -> int:
+    """Create (or replace) [database].[schema].[name] from an Arrow table.
+
+    Runs entirely in one transaction on `conn` (any DB-API connection):
+    commit on success, rollback on any failure."""
+    if if_exists not in ("fail", "replace"):
+        raise WhError(f"if_exists must be 'fail' or 'replace', got '{if_exists}'")
+
+    qualified = f"{quote(database)}.{quote(schema)}.{quote(name)}"
+    columns = ", ".join(f"{quote(f.name)} {sql_type(f)}" for f in table.schema)
+    cursor = conn.cursor()
+    try:
+        cursor.execute(_EXISTS_SQL.format(db=quote(database)), [schema, name])
+        (exists,) = cursor.fetchone()
+        if exists:
+            if if_exists == "fail":
+                raise WhError(
+                    f"{database}.{schema}.{name} already exists — "
+                    f"pass if_exists='replace' to overwrite"
+                )
+            cursor.execute(f"DROP TABLE {qualified}")
+        cursor.execute(f"CREATE TABLE {qualified} ({columns})")
+
+        if table.num_rows:
+            col_list = ", ".join(quote(f.name) for f in table.schema)
+            placeholders = ", ".join("?" * table.num_columns)
+            insert = f"INSERT INTO {qualified} ({col_list}) VALUES ({placeholders})"
+            cols = [c.to_pylist() for c in table.columns]
+            rows = list(zip(*cols))
+            for i in range(0, len(rows), batch_size):
+                cursor.executemany(insert, rows[i : i + batch_size])
+        conn.commit()
+        return table.num_rows
+    except BaseException:
+        conn.rollback()
+        raise
+    finally:
+        cursor.close()
