@@ -60,7 +60,10 @@ SQL Server. Excel/CSV readers for messy business files. Oracle later.
   would serve pre-refresh data); it reopens lazily on next `ws.con` access.
 - `land()` registers the streaming Arrow reader directly with DuckDB
   (constant memory); `pull()` materialises. Don't "simplify" land through
-  `frames.to_arrow` — that would read everything into RAM.
+  `frames.to_arrow` — that would read everything into RAM (a test guards this).
+- Landed tables are scratch BY DESIGN: `mirror()` rebuilds the .duckdb from
+  config alone, so a refresh wipes anything `land()`ed. Documented in the
+  land docstring + README; keep it documented if either changes.
 
 ## Architecture (see design doc for full detail)
 

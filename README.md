@@ -14,6 +14,9 @@ wh.freshness()          # how stale is each table?
 df = wh.pull("SELECT ...")                    # ad-hoc warehouse query -> frame
 wh.pull("SELECT ...", backend="pandas")       # or pick the frame library
 wh.land("SELECT ...", table="scratch.raw")    # big pulls: stream into the .duckdb
+                                              # NB: landed tables are scratch —
+                                              # wh.mirror() rebuilds from config
+                                              # and wipes them
 wh.register(df, "cohort")                     # any frame queryable in SQL:
 con.sql("SELECT * FROM cohort JOIN main.waitlist USING (ur)")
 
