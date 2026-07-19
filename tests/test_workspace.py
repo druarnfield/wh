@@ -82,6 +82,21 @@ def test_freshness(project):
     assert "extracted_at" in fresh.column_names
 
 
+def test_register_polars_frame_queryable(project):
+    import polars as pl
+    ws = Workspace.load(project / "wh.yaml")
+    ws.register(pl.DataFrame({"ur": [1, 2, 3]}), "cohort")
+    assert ws.con.execute("SELECT count(*) FROM cohort").fetchone() == (3,)
+
+
+def test_register_replaces(project):
+    import polars as pl
+    ws = Workspace.load(project / "wh.yaml")
+    ws.register(pl.DataFrame({"x": [1]}), "cohort")
+    ws.register(pl.DataFrame({"x": [1, 2]}), "cohort")   # re-register wins
+    assert ws.con.execute("SELECT count(*) FROM cohort").fetchone() == (2,)
+
+
 def test_freshness_before_any_mirror_is_friendly(project):
     ws = Workspace.load(project / "wh.yaml")
     with pytest.raises(wh.WhError, match="run wh.mirror"):

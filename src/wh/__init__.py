@@ -19,6 +19,7 @@ from .workspace import Workspace
 
 __all__ = [
     "Workspace", "workspace", "connect", "mirror", "freshness",
+    "pull", "land", "register",
     "WhError", "ConfigError", "SourceError", "PushRefused", "SchemaMismatch",
 ]
 
@@ -45,3 +46,15 @@ def mirror(**kwargs):
 
 def freshness():
     return workspace().freshness()
+
+
+def register(frame, name):
+    return workspace().register(frame, name)
+
+
+def pull(sql, **kwargs):
+    return workspace().pull(sql, **kwargs)
+
+
+def land(sql, table, **kwargs):
+    return workspace().land(sql, table, **kwargs)

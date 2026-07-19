@@ -89,6 +89,12 @@ class Workspace:
                 keep_staging=keep_staging, log=log,
             )
 
+    def register(self, frame, name: str) -> None:
+        """Make any dataframe queryable (as `name`) on the session connection."""
+        from .frames import to_arrow
+
+        self.con.register(name, to_arrow(frame))
+
     def freshness(self):
         """One row per mirrored table: mode, row_count, extracted_at, duration_s."""
         if not self.config.duckdb_path.exists():
