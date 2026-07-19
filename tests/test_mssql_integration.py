@@ -28,6 +28,49 @@ def test_pull_and_land_roundtrip(tmp_path):
     ws.close()
 
 
+def test_push_roundtrip(tmp_path):
+    import polars as pl
+    import yaml
+    import wh
+
+    cfg = {
+        "sources": {"warehouse": {"driver": "mssql", "dsn_env": "WH_TEST_DSN"}},
+        "destination": {"duckdb_path": "./t.duckdb"},
+        "push": {"allow": ["ExecReporting.dbo"]},
+        "tables": [{"name": "x", "source": {"query": "SELECT 1 AS a"}}],
+    }
+    (tmp_path / "wh.yaml").write_text(yaml.safe_dump(cfg, sort_keys=False))
+    ws = wh.workspace(tmp_path / "wh.yaml")
+
+    df = pl.DataFrame({"n": [1, 2, 3], "s": ["x", "y", None]})
+    target = "ExecReporting.dbo.wh_push_test"
+    try:
+        assert ws.push(df, target) == 3
+        assert ws.push(df, target, if_exists="replace") == 3
+        with pytest.raises(wh.WhError, match="replace"):
+            ws.push(df, target)
+        back = ws.pull(
+            "SELECT n, s FROM [ExecReporting].[dbo].[wh_push_test] ORDER BY n"
+        )
+        assert back["n"].to_list() == [1, 2, 3]
+        assert back["s"].to_list() == ["x", "y", None]
+        with pytest.raises(wh.PushRefused):
+            ws.push(df, "ExecReporting.other_schema.t")
+    finally:
+        conn = None
+        try:
+            from wh.sources.mssql import open_connection
+
+            conn = open_connection(ws.config.sources["warehouse"])
+            cur = conn.cursor()
+            cur.execute("DROP TABLE IF EXISTS [ExecReporting].[dbo].[wh_push_test]")
+            conn.commit()
+        finally:
+            if conn is not None:
+                conn.close()
+            ws.close()
+
+
 def test_extract_roundtrip(tmp_path):
     from wh.config import Source, SourceRef, TableSpec
     from wh.sources.mssql import MssqlExtractor

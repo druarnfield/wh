@@ -178,6 +178,21 @@ def test_workspace_push_happy_path(project, monkeypatch):
     assert conn.commits == 1
 
 
+def test_module_verbs_survive_submodule_imports():
+    # a submodule's FIRST initialisation binds it onto the package, clobbering
+    # any same-named function from __init__ — so those submodules must be
+    # initialised eagerly during `import wh`, before the verbs are defined
+    import importlib
+
+    import wh
+
+    for mod in ("wh.push", "wh.mirror", "wh.workspace"):
+        importlib.import_module(mod)
+    assert callable(wh.push)
+    assert callable(wh.mirror)
+    assert callable(wh.workspace)
+
+
 def test_push_arrow_rolls_back_on_error():
     from wh.push import push_arrow
 

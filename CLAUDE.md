@@ -19,7 +19,21 @@ SQL Server. Excel/CSV readers for messy business files. Oracle later.
   frame boundary (`frames.py`), `defaults.frames` config, shared session
   connection (`ws.con`), `MssqlExtractor.query()`. Plan:
   `docs/plans/2026-07-19-warehouse-tools-phase2.md`.
-- Next: phase 3 (`push()` with schema allowlist) — needs its own plan.
+- Phase 3 COMPLETE (2026-07-19): `push()` writeback — `push.allow` config,
+  pure helpers + transactional `push_arrow()` over any DB-API conn (fake-conn
+  unit tests), `open_connection()` shared with the extractor. Plan:
+  `docs/plans/2026-07-19-warehouse-tools-phase3.md`.
+- Next: phase 4 (Excel smart reader + cleaners, CSV helpers) — needs its own
+  plan. Later: Oracle source, append/upsert push.
+
+## Phase 3 notes
+
+- push targets are three-part (`Database.schema.table`) to match allowlist
+  entries (`Database.schema`); comparisons case-insensitive.
+- The Arrow→SQL Server type map is the docstring of `src/wh/push.py` — keep
+  code and docstring in sync.
+- `push_arrow()` takes ANY DB-API connection (that's the unit-test seam);
+  allowlist is checked in `Workspace.push()` BEFORE a connection is opened.
 - `attatch.sql` / `start.sql` at repo root are the user's own scratch files —
   leave them alone.
 
@@ -38,9 +52,14 @@ SQL Server. Excel/CSV readers for messy business files. Oracle later.
 
 ## Gotchas learned in phase 1
 
-- `wh.mirror` (module) vs `wh.mirror()` (function in `__init__`) collide:
-  `from . import mirror` inside the package returns the FUNCTION. Always use
-  `from .mirror import build` style.
+- Submodule/verb name collisions (`wh.mirror`, `wh.push`, `wh.workspace`) bite
+  BOTH ways: `from . import mirror` returns the function, and a submodule's
+  first (lazy) initialisation clobbers the same-named function on the package
+  (wh.push broke this way — worked once, then became a module). Rules: use
+  `from .mod import name` style inside the package, and initialise colliding
+  submodules eagerly in `__init__.py` before the verb definitions (see the
+  `_push_submodule` import there; test_module_verbs_survive_submodule_imports
+  guards it).
 - DuckDB: attached catalogs have no `prev.information_schema`; use
   `duckdb_tables() WHERE database_name = 'prev'`. TIMESTAMPTZ results need
   pytz — `_mirror.meta.extracted_at` is plain TIMESTAMP (UTC) instead.

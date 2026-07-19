@@ -17,6 +17,12 @@ from pathlib import Path
 from .errors import ConfigError, PushRefused, SchemaMismatch, SourceError, WhError
 from .workspace import Workspace
 
+# Initialise submodules whose names collide with the module-level verbs below
+# (`push`, `mirror` via workspace, `workspace` itself). A submodule's FIRST
+# import binds it onto the package — if that happens lazily after the verb
+# functions are defined, it silently replaces the function with the module.
+from . import push as _push_submodule  # noqa: F401  (side effect only)
+
 __all__ = [
     "Workspace", "workspace", "connect", "mirror", "freshness",
     "pull", "land", "register", "push",

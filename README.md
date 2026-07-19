@@ -20,10 +20,17 @@ wh.land("SELECT ...", table="scratch.raw")    # big pulls: stream into the .duck
 wh.register(df, "cohort")                     # any frame queryable in SQL:
 con.sql("SELECT * FROM cohort JOIN main.waitlist USING (ur)")
 
+wh.push(results, "Sandbox.dbo.analysis")               # publish results back
+wh.push(results, "Sandbox.dbo.analysis", if_exists="replace")   # republish
+
 # coming in later phases:
-wh.push(df, "Sandbox.dbo.results")       # publish results back
 df = wh.read_excel("messy.xlsx")         # smart Excel reader
 ```
+
+`push()` only writes to schemas listed under `push.allow` in `wh.yaml`
+(`PushRefused` otherwise), takes three-part names (`Database.schema.table`),
+and runs create + insert in one transaction. The Arrow→SQL Server type map
+lives in `src/wh/push.py`'s docstring.
 
 `pull()` returns polars if installed (else pandas, else pyarrow); set
 `defaults.frames` in `wh.yaml` to pin it. `wh.connect()` returns a shared
@@ -56,6 +63,9 @@ sources:
 
 destination:
   duckdb_path: ./metrics.duckdb
+
+push:
+  allow: [Sandbox.dbo]                   # schemas push() may write to
 
 tables:
   - name: waitlist

@@ -15,6 +15,10 @@ destination:
   duckdb_path: ./metrics.duckdb
   parquet_dir: ./parquet
 
+push:
+  allow: # push() refuses anything not listed here
+    - ExecReporting.dbo # dev sandbox; point at your real sandbox schema(s)
+
 defaults:
   mode: native # native | parquet
   schema_in_duckdb: core
