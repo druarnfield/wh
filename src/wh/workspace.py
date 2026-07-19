@@ -7,7 +7,7 @@ from pathlib import Path
 import duckdb
 
 from .config import Config, find_config, load_config
-from .errors import WhError
+from .errors import ConfigError, WhError
 # NOTE: must be `from .mirror import ...` — `from . import mirror` returns the
 # wh.mirror() FUNCTION defined in __init__.py, which shadows this module.
 from .mirror import build as _build
@@ -88,6 +88,58 @@ class Workspace:
                 self.config, extract, only=only,
                 keep_staging=keep_staging, log=log,
             )
+
+    def _source(self, name: str | None):
+        cfg = self.config
+        key = name or cfg.default_source
+        if key not in cfg.sources:
+            raise ConfigError(
+                f"unknown source '{key}' (configured: {', '.join(cfg.sources)})"
+            )
+        return cfg.sources[key]
+
+    def pull(self, sql: str, *, source: str | None = None, backend: str | None = None):
+        """Run sql against a warehouse source, return a dataframe."""
+        from .frames import default_backend, from_arrow, to_arrow
+        from .sources.mssql import MssqlExtractor
+
+        extractor = MssqlExtractor(self._source(source))
+        try:
+            table = to_arrow(extractor.query(sql))
+        finally:
+            extractor.close()
+        return from_arrow(table, backend or self.config.frames or default_backend())
+
+    def land(self, sql: str, table: str, *, source: str | None = None) -> int:
+        """Stream sql results straight into the local DuckDB (constant memory).
+
+        Re-landing the same table replaces it. Returns the row count."""
+        from .sources.mssql import MssqlExtractor
+
+        parts = table.split(".")
+        if len(parts) == 1:
+            schema, name = "main", parts[0]
+        elif len(parts) == 2:
+            schema, name = parts
+        else:
+            raise WhError(f"table must be 'name' or 'schema.name', got '{table}'")
+        qualified = f'"{schema}"."{name}"'
+
+        con = self.con
+        extractor = MssqlExtractor(self._source(source))
+        try:
+            con.register("_wh_land_src", extractor.query(sql))
+            try:
+                con.execute(f'CREATE SCHEMA IF NOT EXISTS "{schema}"')
+                con.execute(
+                    f"CREATE OR REPLACE TABLE {qualified} AS SELECT * FROM _wh_land_src"
+                )
+            finally:
+                con.unregister("_wh_land_src")
+        finally:
+            extractor.close()
+        (count,) = con.execute(f"SELECT count(*) FROM {qualified}").fetchone()
+        return count
 
     def register(self, frame, name: str) -> None:
         """Make any dataframe queryable (as `name`) on the session connection."""
