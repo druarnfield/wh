@@ -29,6 +29,12 @@ build-backend = "uv_build"
 [tool.uv.build-backend]
 module-name = "wh"
 
+[tool.pytest.ini_options]
+filterwarnings = [
+    # ibis 12.x internally calls duckdb's deprecated fetch_arrow_table()
+    "ignore:fetch_arrow_table\\(\\) is deprecated:DeprecationWarning",
+]
+
 [dependency-groups]
 dev = [
     "boring-semantic-layer>=0.3.15,<0.4",

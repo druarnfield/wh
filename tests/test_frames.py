@@ -43,6 +43,14 @@ def test_to_arrow_record_batch_reader():
     assert to_arrow(reader).column("a").to_pylist() == [1, 2]
 
 
+def test_to_arrow_ducktypes_to_pyarrow():
+    class FakeExpr:
+        def to_pyarrow(self):
+            return TABLE
+
+    assert to_arrow(FakeExpr()) is TABLE
+
+
 def test_to_arrow_lazyframe_hint():
     lf = pl.LazyFrame({"a": [1]})
     with pytest.raises(WhError, match="collect"):

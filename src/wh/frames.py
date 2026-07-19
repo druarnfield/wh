@@ -35,6 +35,8 @@ def to_arrow(obj) -> pa.Table:
         return pa.Table.from_batches([obj])
     if isinstance(obj, duckdb.DuckDBPyRelation):
         return obj.to_arrow_table()
+    if hasattr(obj, "to_pyarrow"):          # ibis expressions, BSL queries
+        return obj.to_pyarrow()
     try:
         return nw.from_native(obj, eager_only=True).to_arrow()
     except TypeError as e:

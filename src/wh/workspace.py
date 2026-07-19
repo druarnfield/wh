@@ -235,6 +235,13 @@ class Workspace:
             raise SemanticsError(f"no semantic model '{name}' (available: {available})")
         return models[name]
 
+    def frame(self, obj, backend: str | None = None):
+        """Convert anything frame-ish (BSL query, ibis expr, pandas/polars,
+        DuckDB relation, Arrow) to the preferred backend."""
+        from .frames import from_arrow, to_arrow
+
+        return from_arrow(to_arrow(obj), self._backend(backend))
+
     def _backend(self, backend: str | None) -> str:
         from .frames import default_backend
 

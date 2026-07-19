@@ -95,6 +95,7 @@ JOINED_MODEL = (
 )
 
 
+@pytest.mark.filterwarnings("ignore:Grain mismatch detected")
 def test_cross_file_join_models_load(semantic_project):
     # merge-then-one-call exists precisely so this does not KeyError:
     # per-file from_yaml loading cannot resolve joins across files.
@@ -115,6 +116,7 @@ def test_cross_file_join_models_load(semantic_project):
     "'No aggregation results and full join unavailable') regardless of file "
     "layout; strict so we notice the release that fixes it",
 )
+@pytest.mark.filterwarnings("ignore:Grain mismatch detected")
 def test_join_dimension_query(semantic_project):
     from wh.workspace import Workspace
 
@@ -186,6 +188,30 @@ def test_register_then_reload_binds_frame(semantic_project):
     )
     out = ws.models(reload=True)["cohort"].aggregate("n").execute()
     assert out.values.tolist() == [[2]]
+
+
+def test_frame_converts_bsl_query(semantic_project):
+    import polars as pl
+
+    from wh.workspace import Workspace
+
+    ws = Workspace.load(semantic_project / "wh.yaml")
+    q = ws.model("waitlist").group_by("specialty").aggregate("patients_waiting")
+    df = ws.frame(q)
+    assert isinstance(df, pl.DataFrame)
+    assert sorted(df.rows()) == [("Cardio", 2), ("Ortho", 1)]
+
+
+def test_frame_backend_override_and_generic(semantic_project):
+    import pandas as pd
+    import polars as pl
+
+    from wh.workspace import Workspace
+
+    ws = Workspace.load(semantic_project / "wh.yaml")
+    q = ws.model("waitlist").aggregate("patients_waiting")
+    assert isinstance(ws.frame(q, backend="pandas"), pd.DataFrame)
+    assert isinstance(ws.frame(pd.DataFrame({"a": [1]})), pl.DataFrame)  # generic
 
 
 def test_models_reload_picks_up_edits(semantic_project):
