@@ -15,7 +15,9 @@ from __future__ import annotations
 from pathlib import Path
 
 from .cleaning import clean
-from .errors import ConfigError, PushRefused, SchemaMismatch, SourceError, WhError
+from .errors import (
+    ConfigError, PushRefused, SchemaMismatch, SemanticsError, SourceError, WhError,
+)
 from .workspace import Workspace
 
 # Initialise submodules whose names collide with the module-level verbs below
@@ -29,6 +31,7 @@ __all__ = [
     "pull", "land", "register", "push",
     "read_excel", "read_csv", "clean",
     "WhError", "ConfigError", "SourceError", "PushRefused", "SchemaMismatch",
+    "SemanticsError",
 ]
 
 _default: Workspace | None = None

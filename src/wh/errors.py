@@ -23,3 +23,7 @@ class PushRefused(WhError):
 
 class SchemaMismatch(WhError):
     pass
+
+
+class SemanticsError(WhError):
+    pass

@@ -107,6 +107,16 @@ def test_frames_invalid(tmp_path):
         load_config(write(tmp_path, cfg_dict))
 
 
+def test_semantics_dir_default(tmp_path):
+    cfg = load_config(write(tmp_path, VALID))
+    assert cfg.semantics_dir == tmp_path / "semantics"
+
+
+def test_semantics_dir_custom(tmp_path):
+    d = {**VALID, "semantics": {"dir": "./defs"}}
+    assert load_config(write(tmp_path, d)).semantics_dir == tmp_path / "defs"
+
+
 def test_push_allow_default_empty(tmp_path):
     assert load_config(write(tmp_path, VALID)).push_allow == []
 

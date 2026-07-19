@@ -122,6 +122,7 @@ class Config:
     tables: list[TableSpec] = field(default_factory=list)
     frames: str | None = None     # preferred pull() backend; None = auto
     push_allow: list[str] = field(default_factory=list)   # "Database.schema"
+    semantics_dir: Path | None = None   # set by load_config; absent dir = no models
 
 
 def _parse_source(name: str, raw: dict) -> Source:
@@ -241,6 +242,9 @@ def load_config(path: Path | str) -> Config:
         tables=tables,
         frames=frames,
         push_allow=push_allow,
+        semantics_dir=(
+            base / ((raw.get("semantics") or {}).get("dir", "semantics"))
+        ).resolve(),
     )
 
 

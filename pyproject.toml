@@ -14,6 +14,10 @@ dependencies = [
 
 [project.optional-dependencies]
 excel = ["python-calamine>=0.5"]
+semantics = [
+    "boring-semantic-layer>=0.3.15,<0.4",
+    "ibis-framework[duckdb]>=10",
+]
 
 [project.scripts]
 wh = "wh.cli:main"
@@ -27,6 +31,8 @@ module-name = "wh"
 
 [dependency-groups]
 dev = [
+    "boring-semantic-layer>=0.3.15,<0.4",
+    "ibis-framework[duckdb]>=12.0.0",
     "openpyxl>=3.1.5",
     "pandas>=3.0.3",
     "polars>=1.42.1",
