@@ -207,25 +207,40 @@ def build(
             )
 
         # ---- phase 2: swap parquet dir (before views: read_parquet binds
-        # at CREATE VIEW time, files must exist at final paths) ----
+        # at CREATE VIEW time, files must exist at final paths). The old dir
+        # is KEPT until the db swap succeeds so a late failure can roll back —
+        # otherwise the old db would serve the new parquet data. ----
+        old_parquet = None
+        parquet_swapped = False
         if staging_parquet.exists():
-            old = cfg.parquet_dir.with_name(cfg.parquet_dir.name + ".old")
-            if old.exists():
-                shutil.rmtree(old)
+            candidate = cfg.parquet_dir.with_name(cfg.parquet_dir.name + ".old")
+            if candidate.exists():
+                shutil.rmtree(candidate)
             if cfg.parquet_dir.exists():
-                cfg.parquet_dir.rename(old)
+                cfg.parquet_dir.rename(candidate)
+                old_parquet = candidate
             staging_parquet.rename(cfg.parquet_dir)
-            if old.exists():
-                shutil.rmtree(old)
+            parquet_swapped = True
 
-        # ---- phase 3: parquet-backed views ----
-        for spec, final_file in pending_views:
-            _create_view(con, spec, final_file)
-        con.close()
-        con = None
+        try:
+            # ---- phase 3: parquet-backed views ----
+            for spec, final_file in pending_views:
+                _create_view(con, spec, final_file)
+            con.close()
+            con = None
 
-        # ---- phase 4: swap the db file ----
-        os.replace(staging_db, cfg.duckdb_path)
+            # ---- phase 4: swap the db file ----
+            os.replace(staging_db, cfg.duckdb_path)
+        except BaseException:
+            if parquet_swapped:
+                if cfg.parquet_dir.exists():
+                    shutil.rmtree(cfg.parquet_dir)
+                if old_parquet is not None:
+                    old_parquet.rename(cfg.parquet_dir)
+            raise
+
+        if old_parquet is not None and old_parquet.exists():
+            shutil.rmtree(old_parquet)
         log(f"Mirror -> {cfg.duckdb_path}  (total {time.time() - t0:.1f}s)")
     finally:
         if con is not None:

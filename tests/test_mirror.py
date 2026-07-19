@@ -47,6 +47,27 @@ def test_parquet_mode_creates_file_and_view(tmp_path):
     assert q(cfg, "SELECT mode, row_count FROM _mirror.meta") == [("parquet", 2)]
 
 
+def test_failure_during_db_swap_restores_live_parquet(tmp_path, monkeypatch):
+    # the realistic Windows case: live .duckdb locked by a notebook while
+    # `wh mirror` runs, so the final os.replace fails AFTER the parquet dir
+    # has been swapped — the old db must not end up serving new parquet data
+    cfg = make_config(tmp_path, [make_spec("t1", mode="parquet")])
+    build(cfg, fake_extract({"t1": {"a": [1]}}), log=lambda s: None)
+
+    def boom(src, dst):
+        raise OSError("file locked")
+
+    monkeypatch.setattr("os.replace", boom)
+    with pytest.raises(OSError):
+        build(cfg, fake_extract({"t1": {"a": [2]}}), log=lambda s: None)
+    monkeypatch.undo()
+
+    # live db and its parquet files still serve the OLD data, no debris left
+    assert q(cfg, 'SELECT a FROM "main"."t1"') == [(1,)]
+    assert not cfg.parquet_dir.with_name("parquet.old").exists()
+    assert not (tmp_path / ".mirror_staging").exists()
+
+
 def test_failed_build_leaves_live_mirror_untouched(tmp_path):
     cfg = make_config(tmp_path, [make_spec("t1"), make_spec("t2")])
     build(cfg, fake_extract({"t1": {"a": [1]}, "t2": {"a": [2]}}), log=lambda s: None)
