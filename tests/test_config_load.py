@@ -92,6 +92,21 @@ def test_no_tables_raises(tmp_path):
         load_config(write(tmp_path, bad))
 
 
+def test_frames_default_is_none(tmp_path):
+    assert load_config(write(tmp_path, VALID)).frames is None
+
+
+def test_frames_parsed(tmp_path):
+    cfg_dict = {**VALID, "defaults": {**VALID["defaults"], "frames": "pandas"}}
+    assert load_config(write(tmp_path, cfg_dict)).frames == "pandas"
+
+
+def test_frames_invalid(tmp_path):
+    cfg_dict = {**VALID, "defaults": {**VALID["defaults"], "frames": "spark"}}
+    with pytest.raises(ConfigError, match="frames"):
+        load_config(write(tmp_path, cfg_dict))
+
+
 def test_missing_file_raises_configerror(tmp_path):
     with pytest.raises(ConfigError, match="cannot read"):
         load_config(tmp_path / "nope" / "wh.yaml")

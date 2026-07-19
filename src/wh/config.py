@@ -16,6 +16,7 @@ VALID_DRIVERS = {"mssql"}
 # codecs DuckDB's parquet COPY accepts; checked at parse time so a typo
 # fails `wh validate` instead of dying mid-build
 VALID_COMPRESSION = {"uncompressed", "snappy", "gzip", "zstd", "brotli", "lz4", "lz4_raw"}
+VALID_FRAMES = {"polars", "pandas", "pyarrow"}
 
 
 @dataclass
@@ -119,6 +120,7 @@ class Config:
     duckdb_path: Path
     parquet_dir: Path
     tables: list[TableSpec] = field(default_factory=list)
+    frames: str | None = None     # preferred pull() backend; None = auto
 
 
 def _parse_source(name: str, raw: dict) -> Source:
@@ -176,6 +178,10 @@ def load_config(path: Path | str) -> Config:
     if default_mode not in VALID_MODES:
         raise ConfigError(f"defaults.mode must be one of {sorted(VALID_MODES)}")
 
+    frames = dfl.get("frames")
+    if frames is not None and frames not in VALID_FRAMES:
+        raise ConfigError(f"defaults.frames must be one of {sorted(VALID_FRAMES)}")
+
     tables: list[TableSpec] = []
     seen: set[tuple[str, str]] = set()
     for i, t in enumerate(raw.get("tables") or []):
@@ -224,6 +230,7 @@ def load_config(path: Path | str) -> Config:
         duckdb_path=duckdb_path,
         parquet_dir=parquet_dir,
         tables=tables,
+        frames=frames,
     )
 
 
