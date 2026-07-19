@@ -48,3 +48,153 @@ def test_merge_empty_dir(tmp_path):
     d = tmp_path / "s"
     d.mkdir()
     assert merge_model_files(d) == ({}, {})
+
+
+def test_models_bind_and_query(semantic_project):
+    from wh.workspace import Workspace
+
+    ws = Workspace.load(semantic_project / "wh.yaml")
+    models = ws.models()
+    assert set(models) == {"waitlist", "clinics"}
+    wl = ws.model("waitlist")
+    out = wl.group_by("specialty").aggregate("patients_waiting").execute()
+    assert sorted(out.values.tolist()) == [["Cardio", 2], ["Ortho", 1]]
+
+
+def test_model_unknown_lists_available(semantic_project):
+    from wh.workspace import Workspace
+
+    ws = Workspace.load(semantic_project / "wh.yaml")
+    with pytest.raises(SemanticsError, match="clinics, waitlist"):
+        ws.model("nope")
+
+
+def test_dotted_schema_binding(semantic_project):
+    from wh.workspace import Workspace
+
+    ws = Workspace.load(semantic_project / "wh.yaml")
+    out = ws.model("clinics").aggregate("n_clinics").execute()
+    assert out.values.tolist() == [[2]]
+
+
+JOINED_MODEL = (
+    "wl_regional:\n"
+    "  table: waitlist\n"
+    "  dimensions:\n"
+    "    clinic:\n"
+    "      expr: _.clinic_code\n"
+    "      is_entity: true\n"
+    "  measures:\n"
+    "    patients: _.count()\n"
+    "  joins:\n"
+    "    clinics:\n"
+    "      model: clinics\n"          # defined in clinics.yml — a DIFFERENT file
+    "      type: one\n"
+    "      left_on: clinic\n"
+    "      right_on: code\n"
+)
+
+
+def test_cross_file_join_models_load(semantic_project):
+    # merge-then-one-call exists precisely so this does not KeyError:
+    # per-file from_yaml loading cannot resolve joins across files.
+    # NOTE: only LOADING is asserted — in BSL 0.3.15 a declared join breaks
+    # every query on that model (see xfail below), so joins are load-safe
+    # but not yet usable upstream.
+    from wh.workspace import Workspace
+
+    (semantic_project / "semantics" / "joined.yml").write_text(JOINED_MODEL)
+    ws = Workspace.load(semantic_project / "wh.yaml")
+    assert "wl_regional" in ws.models()
+    ws.model("wl_regional")     # lookup succeeds; no KeyError from cross-file ref
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="BSL 0.3.15 join querying is broken (grain-mismatch heuristic → "
+    "'No aggregation results and full join unavailable') regardless of file "
+    "layout; strict so we notice the release that fixes it",
+)
+def test_join_dimension_query(semantic_project):
+    from wh.workspace import Workspace
+
+    (semantic_project / "semantics" / "joined.yml").write_text(JOINED_MODEL)
+    ws = Workspace.load(semantic_project / "wh.yaml")
+    out = (
+        ws.model("wl_regional")
+        .group_by("clinics.region")
+        .aggregate("patients")
+        .execute()
+    )
+    assert sorted(out.values.tolist()) == [["North", 2], ["South", 1]]
+
+
+def test_unresolvable_table_lists_candidates(semantic_project):
+    from wh.workspace import Workspace
+
+    (semantic_project / "semantics" / "bad.yml").write_text(
+        "bad:\n  table: no_such\n  measures:\n    n: _.count()\n"
+    )
+    ws = Workspace.load(semantic_project / "wh.yaml")
+    with pytest.raises(SemanticsError, match="waitlist"):
+        ws.models()
+
+
+def test_no_semantics_dir_is_empty(project):
+    from wh.workspace import Workspace
+
+    assert Workspace.load(project / "wh.yaml").models() == {}
+
+
+def test_missing_extra_message(semantic_project, monkeypatch):
+    import wh.semantics as sem
+    from wh.workspace import Workspace
+
+    def no_bsl():
+        raise SemanticsError(
+            "semantic models need the semantics extra — "
+            "uv add 'warehouse-tools[semantics]'"
+        )
+
+    monkeypatch.setattr(sem, "_import_bsl", no_bsl)
+    ws = Workspace.load(semantic_project / "wh.yaml")
+    with pytest.raises(SemanticsError, match=r"warehouse-tools\[semantics\]"):
+        ws.models()
+
+
+def test_cache_self_keys_on_connection(semantic_project):
+    from wh.workspace import Workspace
+
+    ws = Workspace.load(semantic_project / "wh.yaml")
+    m1 = ws.models()
+    assert ws.models() is m1                 # cached
+    ws.close()                               # ANY reopen path, not just mirror()
+    m2 = ws.models()
+    assert m2 is not m1                      # rebuilt on the new connection
+    assert set(m2) == set(m1)
+
+
+def test_register_then_reload_binds_frame(semantic_project):
+    import polars as pl
+
+    from wh.workspace import Workspace
+
+    ws = Workspace.load(semantic_project / "wh.yaml")
+    ws.register(pl.DataFrame({"ur": ["U1", "U2"]}), "cohort")
+    (semantic_project / "semantics" / "cohort.yml").write_text(
+        "cohort:\n  table: cohort\n  measures:\n    n: _.count()\n"
+    )
+    out = ws.models(reload=True)["cohort"].aggregate("n").execute()
+    assert out.values.tolist() == [[2]]
+
+
+def test_models_reload_picks_up_edits(semantic_project):
+    from wh.workspace import Workspace
+
+    ws = Workspace.load(semantic_project / "wh.yaml")
+    assert "extra" not in ws.models()
+    (semantic_project / "semantics" / "extra.yml").write_text(
+        "extra:\n  table: waitlist\n  measures:\n    n: _.count()\n"
+    )
+    assert "extra" not in ws.models()            # still cached
+    assert "extra" in ws.models(reload=True)

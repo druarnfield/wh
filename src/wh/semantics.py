@@ -44,3 +44,45 @@ def merge_model_files(directory: Path) -> tuple[dict, dict]:
             merged[name] = spec
             origins[name] = f.name
     return merged, origins
+
+
+def _import_bsl():
+    try:
+        import boring_semantic_layer as bsl
+        import ibis
+    except ImportError as e:
+        raise SemanticsError(
+            "semantic models need the semantics extra — "
+            "uv add 'warehouse-tools[semantics]'"
+        ) from e
+    return bsl, ibis
+
+
+def _resolve_table(backend, ref: str):
+    from .workspace import _split_table
+
+    schema, name = _split_table(ref)
+    try:
+        return backend.table(name, database=schema)
+    except Exception as e:
+        rows = backend.con.execute(
+            "SELECT schema_name || '.' || table_name FROM duckdb_tables() "
+            "WHERE schema_name NOT IN ('_mirror') ORDER BY 1"
+        ).fetchall()
+        available = ", ".join(r[0] for r in rows) or "none"
+        raise SemanticsError(
+            f"model table '{ref}' not found in the mirror (available: {available})"
+        ) from e
+
+
+def load_models(directory: Path, backend) -> dict:
+    """Merge all model files and bind them in ONE from_config call."""
+    bsl, _ibis = _import_bsl()
+    merged, _origins = merge_model_files(directory)
+    if not merged:
+        return {}
+    tables = {
+        spec["table"]: _resolve_table(backend, spec["table"])
+        for spec in merged.values()
+    }
+    return dict(bsl.from_config(merged, tables=tables))
