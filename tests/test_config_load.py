@@ -1,0 +1,92 @@
+import pytest
+import yaml
+
+from wh.config import load_config
+from wh.errors import ConfigError
+
+VALID = {
+    "sources": {
+        "warehouse": {
+            "driver": "mssql",
+            "server": "localhost,1433",
+            "database": "ExecReporting",
+            "auth": {"user": "sa", "password_env": "WH_PWD"},
+        },
+        "other": {"driver": "mssql", "dsn_env": "OTHER_DSN"},
+    },
+    "destination": {"duckdb_path": "./metrics.duckdb"},
+    "defaults": {"schema_in_duckdb": "core", "mode": "native"},
+    "tables": [
+        {
+            "name": "waitlist",
+            "description": "Current waitlist",
+            "source": {"database": "ExecReporting", "schema": "dbo", "table": "Waits"},
+        },
+        {
+            "name": "snapshot",
+            "schema_in_duckdb": "main",
+            "mode": "parquet",
+            "source": {"query": "SELECT 1 AS x"},
+        },
+    ],
+}
+
+
+def write(tmp_path, cfg_dict):
+    p = tmp_path / "wh.yaml"
+    p.write_text(yaml.safe_dump(cfg_dict, sort_keys=False))
+    return p
+
+
+def test_valid_config(tmp_path):
+    cfg = load_config(write(tmp_path, VALID))
+    assert set(cfg.sources) == {"warehouse", "other"}
+    assert cfg.default_source == "warehouse"          # first listed
+    assert cfg.duckdb_path == (tmp_path / "metrics.duckdb").resolve()
+    assert cfg.parquet_dir == (tmp_path / "parquet").resolve()  # default: sibling
+    t0, t1 = cfg.tables
+    assert (t0.name, t0.schema_in_duckdb, t0.mode) == ("waitlist", "core", "native")
+    assert t0.source.sql() == "SELECT * FROM [ExecReporting].[dbo].[Waits]"
+    assert (t1.name, t1.schema_in_duckdb, t1.mode) == ("snapshot", "main", "parquet")
+    assert t1.source.sql() == "SELECT 1 AS x"
+
+
+def test_relative_paths_resolve_against_config_dir(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path.parent)  # cwd != config dir
+    cfg = load_config(write(tmp_path, VALID))
+    assert cfg.duckdb_path.parent == tmp_path
+
+
+def test_no_sources_raises(tmp_path):
+    bad = {**VALID, "sources": {}}
+    with pytest.raises(ConfigError, match="source"):
+        load_config(write(tmp_path, bad))
+
+
+def test_unknown_driver_raises(tmp_path):
+    bad = {**VALID, "sources": {"w": {"driver": "postgres", "dsn_env": "X"}}}
+    with pytest.raises(ConfigError, match="driver"):
+        load_config(write(tmp_path, bad))
+
+
+def test_table_query_and_ref_mutually_exclusive(tmp_path):
+    bad = dict(VALID)
+    bad["tables"] = [{
+        "name": "x",
+        "source": {"query": "SELECT 1", "database": "a", "schema": "b", "table": "c"},
+    }]
+    with pytest.raises(ConfigError, match="either"):
+        load_config(write(tmp_path, bad))
+
+
+def test_duplicate_table_raises(tmp_path):
+    bad = dict(VALID)
+    bad["tables"] = [VALID["tables"][0], VALID["tables"][0]]
+    with pytest.raises(ConfigError, match="duplicate"):
+        load_config(write(tmp_path, bad))
+
+
+def test_no_tables_raises(tmp_path):
+    bad = {**VALID, "tables": []}
+    with pytest.raises(ConfigError, match="no tables"):
+        load_config(write(tmp_path, bad))

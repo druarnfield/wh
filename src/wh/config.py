@@ -66,3 +66,149 @@ class Source:
         if self.trust_server_certificate:
             parts.append("TrustServerCertificate=yes")
         return ";".join(parts) + ";"
+
+
+@dataclass
+class SourceRef:
+    query: str | None = None
+    database: str | None = None
+    schema: str | None = None
+    table: str | None = None
+
+    def sql(self) -> str:
+        if self.query:
+            return self.query
+        return f"SELECT * FROM [{self.database}].[{self.schema}].[{self.table}]"
+
+    def validate(self, name: str) -> None:
+        if self.query:
+            if any([self.database, self.schema, self.table]):
+                raise ConfigError(
+                    f"table '{name}': give either 'query' OR database/schema/table, not both"
+                )
+        elif not all([self.database, self.schema, self.table]):
+            raise ConfigError(
+                f"table '{name}': needs 'query' or all of database/schema/table"
+            )
+
+
+@dataclass
+class TableSpec:
+    name: str
+    source: SourceRef
+    schema_in_duckdb: str = "main"
+    description: str | None = None
+    mode: str = "native"
+    compression: str = "zstd"
+    compression_level: int = 9
+    batch_size: int = DEFAULT_BATCH_SIZE
+
+    @property
+    def qualified(self) -> str:
+        return f'"{self.schema_in_duckdb}"."{self.name}"'
+
+
+@dataclass
+class Config:
+    path: Path                    # the wh.yaml this was loaded from
+    sources: dict[str, Source]
+    default_source: str           # first source listed
+    duckdb_path: Path
+    parquet_dir: Path
+    tables: list[TableSpec] = field(default_factory=list)
+
+
+def _parse_source(name: str, raw: dict) -> Source:
+    driver = raw.get("driver", "mssql")
+    if driver not in VALID_DRIVERS:
+        raise ConfigError(
+            f"source '{name}': driver must be one of {sorted(VALID_DRIVERS)}"
+        )
+    a = raw.get("auth") or {}
+    return Source(
+        name=name,
+        driver=driver,
+        server=raw.get("server"),
+        database=raw.get("database"),
+        encrypt=bool(raw.get("encrypt", True)),
+        trust_server_certificate=bool(raw.get("trust_server_certificate", False)),
+        auth=Auth(
+            user=a.get("user"),
+            password_env=a.get("password_env"),
+            trusted=bool(a.get("trusted", False)),
+        ),
+        dsn_env=raw.get("dsn_env"),
+    )
+
+
+def load_config(path: Path | str) -> Config:
+    path = Path(path).resolve()
+    with open(path) as f:
+        raw = yaml.safe_load(f)
+    if not isinstance(raw, dict):
+        raise ConfigError("config root must be a mapping")
+    base = path.parent
+
+    raw_sources = raw.get("sources") or {}
+    if not raw_sources:
+        raise ConfigError("at least one entry under 'sources:' is required")
+    sources = {n: _parse_source(n, s or {}) for n, s in raw_sources.items()}
+    default_source = next(iter(sources))
+
+    dst = raw.get("destination") or {}
+    dfl = raw.get("defaults") or {}
+
+    duckdb_path = dst.get("duckdb_path")
+    if not duckdb_path:
+        raise ConfigError("destination.duckdb_path is required")
+    duckdb_path = (base / duckdb_path).resolve()
+    parquet_dir = (base / dst.get("parquet_dir", duckdb_path.parent / "parquet")).resolve()
+
+    default_mode = dfl.get("mode", "native")
+    if default_mode not in VALID_MODES:
+        raise ConfigError(f"defaults.mode must be one of {sorted(VALID_MODES)}")
+
+    tables: list[TableSpec] = []
+    seen: set[tuple[str, str]] = set()
+    for i, t in enumerate(raw.get("tables") or []):
+        name = t.get("name")
+        if not name:
+            raise ConfigError(f"tables[{i}]: 'name' is required")
+        s = t.get("source") or {}
+        source = SourceRef(
+            query=s.get("query"),
+            database=s.get("database"),
+            schema=s.get("schema"),
+            table=s.get("table"),
+        )
+        source.validate(name)
+        mode = t.get("mode", default_mode)
+        if mode not in VALID_MODES:
+            raise ConfigError(f"table '{name}': mode must be one of {sorted(VALID_MODES)}")
+        extract = t.get("extract") or {}
+        spec = TableSpec(
+            name=name,
+            source=source,
+            schema_in_duckdb=t.get("schema_in_duckdb", dfl.get("schema_in_duckdb", "main")),
+            description=t.get("description"),
+            mode=mode,
+            compression=t.get("compression", dfl.get("compression", "zstd")),
+            compression_level=int(t.get("compression_level", dfl.get("compression_level", 9))),
+            batch_size=int(extract.get("batch_size", dfl.get("batch_size", DEFAULT_BATCH_SIZE))),
+        )
+        key = (spec.schema_in_duckdb, spec.name)
+        if key in seen:
+            raise ConfigError(f"duplicate table {spec.schema_in_duckdb}.{spec.name}")
+        seen.add(key)
+        tables.append(spec)
+    if not tables:
+        raise ConfigError("no tables defined")
+
+    return Config(
+        path=path,
+        sources=sources,
+        default_source=default_source,
+        duckdb_path=duckdb_path,
+        parquet_dir=parquet_dir,
+        tables=tables,
+    )
