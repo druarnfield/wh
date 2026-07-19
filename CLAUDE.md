@@ -11,10 +11,13 @@ SQL Server. Excel/CSV readers for messy business files. Oracle later.
 
 ## Current state
 
-- Phase 1 in progress: executing `docs/plans/2026-07-19-warehouse-tools-phase1.md`
-  task-by-task (TDD, commit per task). Update the line above as tasks land.
-- `mirror.py` + `config.yaml` at repo root are the POC — deleted in Task 13,
-  replaced by the `src/wh/` package and `wh.yaml`.
+- Phase 1 COMPLETE (2026-07-19): `src/wh/` package with config/discovery,
+  Workspace, connect/mirror/freshness, carry-over `--only`, `_mirror.meta`,
+  MssqlExtractor, CLI. Verified end-to-end against the local dev server.
+- Next: phase 2 (`pull()` / `land()` / `register()` + narwhals boundary) —
+  needs its own plan, written against the design doc.
+- `attatch.sql` / `start.sql` at repo root are the user's own scratch files —
+  leave them alone.
 
 ## Key documents
 
@@ -25,9 +28,23 @@ SQL Server. Excel/CSV readers for messy business files. Oracle later.
 
 - `uv run pytest` — full suite; SQL Server integration tests auto-skip
 - `WH_TEST_DSN='Server=localhost,1433;Database=ExecReporting;UID=sa;PWD=...;Encrypt=no;TrustServerCertificate=yes;' uv run pytest` — include integration tests (local dev server)
-- `uv run wh validate` / `uv run wh mirror [--only <table>]` — CLI (from Task 12)
-- Dev SQL Server: localhost,1433, database ExecReporting; password lives in an
-  env var (`WH_WAREHOUSE_PWD` once wh.yaml lands), never in config files.
+- `uv run wh validate` / `uv run wh mirror [--only <table>]` — CLI
+- Dev SQL Server: localhost,1433, database ExecReporting; password lives in
+  `WH_WAREHOUSE_PWD` (ask the user; never write it into tracked files).
+
+## Gotchas learned in phase 1
+
+- `wh.mirror` (module) vs `wh.mirror()` (function in `__init__`) collide:
+  `from . import mirror` inside the package returns the FUNCTION. Always use
+  `from .mirror import build` style.
+- DuckDB: attached catalogs have no `prev.information_schema`; use
+  `duckdb_tables() WHERE database_name = 'prev'`. TIMESTAMPTZ results need
+  pytz — `_mirror.meta.extracted_at` is plain TIMESTAMP (UTC) instead.
+  `.arrow()` on a result is a lazy reader; use `.to_arrow_table()`.
+- `yaml.safe_dump` sorts keys — tests asserting "first source is default"
+  must dump with `sort_keys=False`.
+- Bash: `pytest | tail` swallows pytest's exit code; `set -o pipefail` before
+  chaining `&& git commit`.
 
 ## Architecture (see design doc for full detail)
 

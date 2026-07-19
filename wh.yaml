@@ -1,22 +1,28 @@
-# mirror.py configuration
-# Connection string is read from the env var named below, e.g.
-#   export MSSQL_DSN="Server=myserver;Database=Reporting;Trusted_Connection=yes;"
-source:
-  dsn_env: MSSQL_DSN
+# wh configuration — see docs/plans/2026-07-19-warehouse-tools-design.md
+# Secrets never live here: the password comes from $WH_WAREHOUSE_PWD.
+sources:
+  warehouse:
+    driver: mssql
+    server: localhost,1433
+    database: ExecReporting
+    encrypt: false # local dev server; defaults to true
+    trust_server_certificate: true
+    auth:
+      user: sa
+      password_env: WH_WAREHOUSE_PWD
 
 destination:
   duckdb_path: ./metrics.duckdb
-  parquet_dir: ./parquet # only used by parquet-mode tables
+  parquet_dir: ./parquet
 
 defaults:
   mode: native # native | parquet
   schema_in_duckdb: core
   compression: zstd
   compression_level: 9
-  batch_size: 100000 # arrow_reader batch size
+  batch_size: 100000
 
 tables:
-  # Whole-table mirror of a curated SQL Server object
   - name: outpatient_waitlist_current
     description: "Current Outpatient Waitlist"
     schema_in_duckdb: main
@@ -25,12 +31,9 @@ tables:
       schema: dbo
       table: OutpatientWaitsCurrent
 
-  # Query-defined extract
   - name: outpatient_waitlist_snapshot
-    description: "Daily waitlist snapshot, last 3 years only"
+    description: "Daily waitlist snapshot"
     schema_in_duckdb: main
     source:
       query: >
         SELECT * FROM [ExecReporting].[dbo].[OutpatientWaitsPatientLevel]
-    extract:
-      batch-size: 100000
