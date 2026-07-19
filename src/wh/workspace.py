@@ -13,6 +13,25 @@ from .errors import ConfigError, SourceError, WhError
 from .mirror import build as _build
 
 
+def _split_table(table: str) -> tuple[str, str]:
+    parts = table.split(".")
+    if len(parts) == 1:
+        schema, name = "main", parts[0]
+    elif len(parts) == 2:
+        schema, name = parts
+    else:
+        raise WhError(f"table must be 'name' or 'schema.name', got '{table}'")
+    if not schema or not name:
+        raise WhError(f"table must be 'name' or 'schema.name', got '{table}'")
+    if schema == "_mirror":
+        raise WhError("the _mirror schema holds mirror metadata — land elsewhere")
+    return schema, name
+
+
+def _qi(ident: str) -> str:
+    return '"' + ident.replace('"', '""') + '"'
+
+
 class Workspace:
     def __init__(self, config: Config):
         self.config = config
@@ -123,29 +142,15 @@ class Workspace:
         from the config alone, so a refresh WIPES anything you landed."""
         from .sources.mssql import MssqlExtractor
 
-        parts = table.split(".")
-        if len(parts) == 1:
-            schema, name = "main", parts[0]
-        elif len(parts) == 2:
-            schema, name = parts
-        else:
-            raise WhError(f"table must be 'name' or 'schema.name', got '{table}'")
-        if not schema or not name:
-            raise WhError(f"table must be 'name' or 'schema.name', got '{table}'")
-        if schema == "_mirror":
-            raise WhError("the _mirror schema holds mirror metadata — land elsewhere")
-
-        def qi(ident: str) -> str:
-            return '"' + ident.replace('"', '""') + '"'
-
-        qualified = f"{qi(schema)}.{qi(name)}"
+        schema, name = _split_table(table)
+        qualified = f"{_qi(schema)}.{_qi(name)}"
 
         con = self.con
         extractor = MssqlExtractor(self._source(source))
         try:
             con.register("_wh_land_src", extractor.query(sql))
             try:
-                con.execute(f"CREATE SCHEMA IF NOT EXISTS {qi(schema)}")
+                con.execute(f"CREATE SCHEMA IF NOT EXISTS {_qi(schema)}")
                 try:
                     con.execute(
                         f"CREATE OR REPLACE TABLE {qualified} "
@@ -192,6 +197,63 @@ class Workspace:
         from .frames import to_arrow
 
         self.con.register(name, to_arrow(frame))
+
+    def _backend(self, backend: str | None) -> str:
+        from .frames import default_backend
+
+        return backend or self.config.frames or default_backend()
+
+    def _land_obj(self, obj, table: str) -> int:
+        """CREATE OR REPLACE a workspace table from an Arrow table/relation."""
+        schema, name = _split_table(table)
+        qualified = f"{_qi(schema)}.{_qi(name)}"
+        con = self.con
+        con.register("_wh_file_src", obj)
+        try:
+            con.execute(f"CREATE SCHEMA IF NOT EXISTS {_qi(schema)}")
+            con.execute(
+                f"CREATE OR REPLACE TABLE {qualified} AS SELECT * FROM _wh_file_src"
+            )
+        finally:
+            con.unregister("_wh_file_src")
+        (count,) = con.execute(f"SELECT count(*) FROM {qualified}").fetchone()
+        return count
+
+    def read_excel(
+        self,
+        path,
+        *,
+        sheet: str | int | None = None,
+        header="auto",
+        skip_rows: int = 0,
+        backend: str | None = None,
+        land: str | None = None,
+    ):
+        """Smart Excel reader (see wh.sources.excel). Returns a frame, or the
+        row count when land='schema.table' writes it into the workspace db."""
+        from .frames import from_arrow
+        from .sources.excel import read_excel_arrow
+
+        table = read_excel_arrow(path, sheet=sheet, header=header, skip_rows=skip_rows)
+        if land is not None:
+            return self._land_obj(table, land)
+        return from_arrow(table, self._backend(backend))
+
+    def read_csv(
+        self,
+        path,
+        *,
+        backend: str | None = None,
+        land: str | None = None,
+        **options,
+    ):
+        """CSV via DuckDB's sniffing reader; **options pass to read_csv."""
+        from .frames import from_arrow
+
+        rel = self.con.read_csv(str(path), **options)
+        if land is not None:
+            return self._land_obj(rel, land)
+        return from_arrow(rel.to_arrow_table(), self._backend(backend))
 
     def freshness(self):
         """One row per mirrored table: mode, row_count, extracted_at, duration_s."""
