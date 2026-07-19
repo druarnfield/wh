@@ -39,3 +39,103 @@ def detect_header(rows: list[list[Any]], scan: int = SCAN) -> int:
             "pass header=<row index> (0-based) or header=None"
         )
     return best
+
+
+def _load_rows(path: Path, sheet) -> list[list[Any]]:
+    try:
+        from python_calamine import CalamineWorkbook
+    except ImportError as e:
+        raise WhError(
+            "excel support needs python-calamine — install warehouse-tools[excel]"
+        ) from e
+    if not Path(path).exists():
+        raise WhError(f"no such file: {path}")
+    wb = CalamineWorkbook.from_path(str(path))
+    names = wb.sheet_names
+    if sheet is None:
+        target = names[0]
+    elif isinstance(sheet, int):
+        if sheet >= len(names):
+            raise WhError(f"sheet index {sheet} out of range ({len(names)} sheets)")
+        target = names[sheet]
+    else:
+        if sheet not in names:
+            raise WhError(f"no sheet '{sheet}' (sheets: {', '.join(names)})")
+        target = sheet
+    return wb.get_sheet_by_name(target).to_python(skip_empty_area=False)
+
+
+def _cell_str(v: Any) -> str:
+    # calamine returns Excel numbers as floats; "8" in a cell must not
+    # become "8.0" when a mixed column degrades to strings
+    if isinstance(v, float) and v.is_integer():
+        return str(int(v))
+    return str(v)
+
+
+def _fill_right(row: list[Any]) -> list[Any]:
+    out, last = [], None
+    for v in row:
+        if not _cell_empty(v):
+            last = v
+        out.append(last)
+    return out
+
+
+def _column_names(header_rows: list[list[Any]] | None, ncols: int) -> list[str]:
+    if header_rows is None:
+        return [f"col_{i}" for i in range(ncols)]
+    # forward-fill merged cells in the upper rows of a multi-row header;
+    # empties in the last (or only) row mean "unnamed column", not a merge
+    filled = [_fill_right(r) for r in header_rows[:-1]] + [header_rows[-1]]
+    names, used = [], set()
+    for i in range(ncols):
+        parts = []
+        for r in filled:
+            v = r[i] if i < len(r) else None
+            if not _cell_empty(v):
+                parts.append(str(v).strip())
+        base = " ".join(parts) or f"col_{i}"
+        n, k = base, 1
+        while n in used:
+            k += 1
+            n = f"{base}_{k}"
+        used.add(n)
+        names.append(n)
+    return names
+
+
+def read_excel_arrow(
+    path: str | Path,
+    *,
+    sheet: str | int | None = None,
+    header: str | int | tuple | None = "auto",
+    skip_rows: int = 0,
+) -> pa.Table:
+    """Read one sheet into an Arrow table. header: "auto" | int | (int, int)
+    | None (row indexes are 0-based, counted after skip_rows)."""
+    rows = _load_rows(Path(path), sheet)[skip_rows:]
+    if header == "auto":
+        idx = detect_header(rows)
+        header_rows, data = [rows[idx]], rows[idx + 1 :]
+    elif header is None:
+        header_rows, data = None, rows
+    elif isinstance(header, tuple):
+        lo, hi = min(header), max(header)
+        header_rows, data = rows[lo : hi + 1], rows[hi + 1 :]
+    else:
+        header_rows, data = [rows[header]], rows[header + 1 :]
+
+    ncols = max((len(r) for r in (header_rows or []) + data), default=0)
+    names = _column_names(header_rows, ncols)
+
+    columns = {}
+    for i, name in enumerate(names):
+        vals = [r[i] if i < len(r) else None for r in data]
+        vals = [None if _cell_empty(v) else v for v in vals]
+        try:
+            arr = pa.array(vals)
+        except (pa.ArrowInvalid, pa.ArrowTypeError):
+            arr = pa.array([None if v is None else _cell_str(v) for v in vals])
+        columns[name] = arr
+    return pa.table(columns)

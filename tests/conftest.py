@@ -28,6 +28,26 @@ def project(tmp_path):
     return tmp_path
 
 
+@pytest.fixture
+def messy_xlsx(tmp_path):
+    """A realistically messy workbook: title rows, gap column, mixed
+    number-as-text column, second sheet."""
+    from openpyxl import Workbook
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Data"
+    ws.append(["Acme Health — Waitlist Extract"])
+    ws.append([])
+    ws.append(["UR", "Referral Date", None, "Days Waiting"])
+    ws.append(["A1", "2026-01-01", None, "1,234"])
+    ws.append(["A2", "2026-01-05", None, 8])
+    wb.create_sheet("Notes").append(["ignore me"])
+    p = tmp_path / "messy.xlsx"
+    wb.save(p)
+    return p
+
+
 def make_spec(name, schema="main", mode="native", **kw):
     return TableSpec(
         name=name, source=SourceRef(query=f"SELECT * FROM {name}"),
