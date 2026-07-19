@@ -29,6 +29,11 @@ def main(argv: list[str] | None = None) -> int:
         cfg = load_config(args.config or find_config())
         if args.command == "validate":
             print(f"OK: {len(cfg.tables)} tables -> {cfg.duckdb_path}")
+            from .semantics import validate_semantics
+
+            summary = validate_semantics(cfg)
+            if summary:
+                print(summary)
             return 0
         Workspace(cfg).mirror(only=args.only, keep_staging=args.keep_staging)
         return 0

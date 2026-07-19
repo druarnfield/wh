@@ -75,6 +75,35 @@ def _resolve_table(backend, ref: str):
         ) from e
 
 
+def validate_semantics(cfg) -> str | None:
+    """Validate model files for `wh validate`. Returns a summary line, or
+    None when there is nothing to check. Raises SemanticsError on problems.
+
+    Policy: no dir / no model files → skip silently. Files present but the
+    [semantics] extra missing → FAIL (silently skipping would let broken
+    models pass CI). Full table binding only when the mirror file exists —
+    CI typically has none, but structure/duplicates must still fail there."""
+    d = cfg.semantics_dir
+    if d is None or not d.is_dir():
+        return None
+    merged, _ = merge_model_files(d)     # structural: parse, duplicates, table keys
+    if not merged:
+        return None
+    _import_bsl()                        # extra is required from here on
+    n = len(merged)
+    plural = "s" if n != 1 else ""
+    if not cfg.duckdb_path.exists():
+        return f"OK: {n} semantic model{plural} (structure only — no mirror to bind)"
+    from .workspace import Workspace
+
+    ws = Workspace(cfg)
+    try:
+        models = ws.models(reload=True)  # full bind
+    finally:
+        ws.close()
+    return f"OK: {len(models)} semantic model{plural} bound"
+
+
 def load_models(directory: Path, backend) -> dict:
     """Merge all model files and bind them in ONE from_config call."""
     bsl, _ibis = _import_bsl()

@@ -19,6 +19,36 @@ def test_no_config_found(tmp_path, monkeypatch, capsys):
     assert main(["validate"]) == 2
 
 
+def test_validate_semantics_structural_failure(project, capsys):
+    sdir = project / "semantics"
+    sdir.mkdir()
+    (sdir / "bad.yml").write_text("- not a mapping\n")
+    assert main(["validate", "--config", str(project / "wh.yaml")]) == 2
+    assert "bad.yml" in capsys.readouterr().err
+
+
+def test_validate_semantics_ok_without_mirror(project, capsys):
+    sdir = project / "semantics"
+    sdir.mkdir()
+    (sdir / "m.yml").write_text("m:\n  table: t1\n  measures:\n    n: _.count()\n")
+    assert main(["validate", "--config", str(project / "wh.yaml")]) == 0
+    out = capsys.readouterr().out
+    assert "1 semantic model" in out and "structure only" in out
+
+
+def test_validate_semantics_full_bind_with_mirror(semantic_project, capsys):
+    (semantic_project / "semantics" / "bad.yml").write_text(
+        "bad:\n  table: no_such\n  measures:\n    n: _.count()\n"
+    )
+    assert main(["validate", "--config", str(semantic_project / "wh.yaml")]) == 2
+    assert "no_such" in capsys.readouterr().err
+
+
+def test_validate_no_semantics_dir_still_ok(project, capsys):
+    assert main(["validate", "--config", str(project / "wh.yaml")]) == 0
+    assert "semantic model" not in capsys.readouterr().out
+
+
 def test_mirror_cli_wiring(project, monkeypatch, capsys):
     import duckdb
     import pyarrow as pa
