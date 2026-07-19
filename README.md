@@ -23,9 +23,26 @@ con.sql("SELECT * FROM cohort JOIN main.waitlist USING (ur)")
 wh.push(results, "Sandbox.dbo.analysis")               # publish results back
 wh.push(results, "Sandbox.dbo.analysis", if_exists="replace")   # republish
 
-# coming in later phases:
-df = wh.read_excel("messy.xlsx")         # smart Excel reader
+raw = wh.read_excel("messy.xlsx")        # finds the real header under title rows
+df = wh.clean(raw,                       # composable cleaners, polars or pandas
+    wh.clean.snake_names,                # "Referral Date " -> referral_date
+    wh.clean.drop_empty,                 # all-null rows and columns
+    wh.clean.strip_strings,
+    wh.clean.parse_dates("referral_date", format="%d/%m/%Y"),
+    wh.clean.numeric("amount"),          # "$1,250.00", "-" -> 1250.0, null
+)
+df = wh.read_csv("easy.csv")             # DuckDB's sniffing reader
+wh.read_excel("messy.xlsx", land="files.raw")   # or straight into the .duckdb
+
+# coming later: oracle source, append/upsert push
 ```
+
+`read_excel` takes `sheet=` (name or index), `header=` (`"auto"` default, an
+explicit row index, `(top, bottom)` for multi-row headers with merged cells,
+or `None`), and `skip_rows=`. Mixed-type columns degrade to strings rather
+than erroring — `wh.clean.numeric` sorts them out. Both readers work without
+a `wh.yaml` unless you use `land=`. Excel needs the extra:
+`uv add "warehouse-tools[excel] @ git+..."`.
 
 `push()` only writes to schemas listed under `push.allow` in `wh.yaml`
 (`PushRefused` otherwise), takes three-part names (`Database.schema.table`),

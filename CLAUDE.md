@@ -23,8 +23,24 @@ SQL Server. Excel/CSV readers for messy business files. Oracle later.
   pure helpers + transactional `push_arrow()` over any DB-API conn (fake-conn
   unit tests), `open_connection()` shared with the extractor. Plan:
   `docs/plans/2026-07-19-warehouse-tools-phase3.md`.
-- Next: phase 4 (Excel smart reader + cleaners, CSV helpers) — needs its own
-  plan. Later: Oracle source, append/upsert push.
+- Phase 4 COMPLETE (2026-07-19): `read_excel` (calamine, auto/multi-row
+  headers), `clean` + cleaners (`cleaning.py`), `read_csv`, `land=` on both
+  readers, configless module-level fallback. Plan:
+  `docs/plans/2026-07-19-warehouse-tools-phase4.md`.
+- Design fully delivered. Later: Oracle source, append/upsert push.
+
+## Phase 4 notes
+
+- `cleaning.py` is deliberately NOT named `clean.py` (submodule/verb shadowing
+  gotcha); `sources/excel.py` ≠ `read_excel` for the same reason.
+- Excel mixed-type columns degrade to ALL-string by design (calamine floats
+  render "8" not "8.0" via `_cell_str`); `clean.numeric` recovers numbers.
+- Header forward-fill (merged cells) applies to all header rows EXCEPT the
+  last — empties in the last/only header row mean "unnamed col" → col_N.
+- `land=` on readers is raw replace semantics (blank rows included); clean
+  first and use `register()`/`push()` if you want cleaned data persisted.
+- Module-level `read_excel`/`read_csv` work with no wh.yaml (frame path only);
+  `land=` without a config raises ConfigError.
 
 ## Phase 3 notes
 
