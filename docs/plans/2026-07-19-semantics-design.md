@@ -13,28 +13,34 @@ no serving, no CLI query surface.
 
 ## Design principle
 
-**Definitions in YAML, execution through the session connection, sugar on
-top.** `wh` owns exactly one piece of query logic: the kwargs→fluent mapping
-inside `metric()` (BSL v2's query surface is fluent —
-`model.group_by(...).aggregate(...)` — the kwargs form no longer exists in
-the library API). Everything else — filter semantics, time grains, joins,
-windows — is BSL's, reached by dropping down one layer:
+**Definitions in YAML, execution through the session connection, zero query
+semantics in wh.** BSL's query surface is fluent
+(`model.group_by(...).aggregate(...)`) — its authors deleted the v1 kwargs
+form deliberately, and an earlier draft of this design resurrected it as
+`wh.metric()`; adversarial review showed every substantive flaw concentrated
+in that mapping (filter placement, order_by shape, error interception): the
+signature of building a lagging dialect. So `wh` wraps nothing about
+querying. Its sugar is model lookup and frame conversion only:
 
 ```python
 import wh
+from ibis import _
 
-models = wh.models()                  # all semantic models, bound to the mirror
-df = wh.metric("waitlist",            # the 90% one-liner → preferred frame
-    measures=["patients_waiting", "median_wait_days"],
-    dims=["specialty", "clinic"],
-    filters=[_.wait_days > 30],       # optional; ibis deferred / lambdas
-    order_by=[("patients_waiting", "desc")],
-    limit=100,
-    backend="pandas",                 # optional, like pull()
+wl = wh.model("waitlist")            # lookup; unknown name → SemanticsError
+                                     # listing available models
+df = wh.frame(                       # ANY frame-ish thing → preferred backend
+    wl.filter(_.wait_days > 30)      # 100% BSL fluent API — filters, time
+      .group_by("specialty")         # grains, joins, HAVING, windows, .sql()
+      .aggregate("patients_waiting") # — nothing mapped, nothing lagging
 )
-wl = models["waitlist"]               # raw BSL semantic table (an Ibis expr):
-                                      # fluent API, windows, joins, .sql()
+models = wh.models()                 # the full dict when you want it
 ```
+
+`wh.frame(obj, backend=None)` is generic, not semantics-specific: it converts
+BSL query expressions and Ibis expressions (duck-typed on `.to_pyarrow()`,
+verified present), plus everything `frames.to_arrow` already accepts
+(pandas/polars frames, DuckDB relations, Arrow) to the preferred backend.
+One reusable concept instead of one bespoke query dialect.
 
 ## Decisions made
 
@@ -48,33 +54,18 @@ wl = models["waitlist"]               # raw BSL semantic table (an Ibis expr):
   file (mixed-mode connections are forbidden in-process; a second handle
   would break swap semantics). Consequence: `register()`ed frames and
   `land()`ed tables bind into models like any mirror table.
-- **`metric()` owns the mapping.** Its entire implementation (order matters —
-  review-verified):
-
-  ```python
-  q = self.models()[model]        # unknown model → SemanticsError listing models
-  # validate requested names against the model's declared dims/measures FIRST:
-  # BSL's own error lists raw table columns, not semantic names — misleading.
-  for f in filters:  q = q.filter(f)      # BEFORE aggregation: filters are
-                                          # row-level, may reference any raw
-                                          # column (post-agg placement dies at
-                                          # execute time on non-measure refs)
-  if dims:     q = q.group_by(*dims)
-  q = q.aggregate(*measures)
-  for o in order_by: q = q.order_by(_translate(o))
-  if limit:    q = q.limit(limit)
-  return from_arrow(q.to_pyarrow(), self._backend(backend))
-  ```
-
-  `order_by` accepts `"col"` (ascending) or `("col", "desc"|"asc")` — BSL
-  does NOT take tuples, so `_translate` maps tuples to `ibis.desc/asc`
-  (verified: tuples raise SignatureValidationError raw). Measure-level
-  (HAVING) filters are NOT `metric()`'s job — use the fluent escape hatch;
-  a `having=` kwarg can come later if demand appears. Unknown dim/measure
-  names → `SemanticsError` listing what the model actually defines.
-  (`to_pyarrow()` verified present; fall back to `execute()`→pandas if a BSL
-  version lacks it.) Results flow through the frames boundary → polars /
-  `defaults.frames`, not BSL's pandas default.
+- **No `metric()`; `model()` + `frame()` instead.** `wh.model(name)` is
+  `models()[name]` with a `SemanticsError` listing available models on a
+  miss. `wh.frame(obj, backend=None)` = `to_arrow` (extended to duck-type
+  `.to_pyarrow()`) → `from_arrow` with the usual backend resolution. Query
+  construction is entirely BSL's fluent API; `wh` maintains no mapping, so
+  BSL feature growth (time grains, HAVING, windows) is available on day one
+  and BSL API churn surfaces visibly in notebooks (a find-replace) rather
+  than silently in a compatibility shim. Known trade-off: BSL's query-time
+  errors reach users undiluted, and its bad-name error lists raw table
+  columns rather than semantic names (verified) — that's an upstream issue
+  to file, not a wrapper to build; model discovery is served by the model
+  repr (dims/measures with descriptions).
 - **Ibis backend is private** (`ws._ibis()`, cached): its v1 job is plumbing
   for `models()`. Semantic tables already expose full Ibis; promote to a
   public verb only if real ad-hoc demand materialises.
@@ -99,7 +90,7 @@ wl = models["waitlist"]               # raw BSL semantic table (an Ibis expr):
   including the YAML schema, so the "YAML is the stable interface" rule is
   a working assumption, not a contract; upgrades are deliberate and
   `semantics.py` absorbs churn. All semantic imports are lazy inside
-  `models()`/`metric()` via one small import function (so tests can fake
+  `models()`/`model()` via one small import function (so tests can fake
   its absence); missing extra → one clear sentence with the install command.
   (BSL exposes no `__version__`; use `importlib.metadata.version` if needed.)
 
@@ -107,13 +98,15 @@ wl = models["waitlist"]               # raw BSL semantic table (an Ibis expr):
 
 ```
 src/wh/
-  semantics.py     # _ibis plumbing, models(), metric(), validation helper
+  semantics.py     # _ibis plumbing, models(), model(), validation helper
 semantics/         # (analysis project, not this repo) *.yml model files
 ```
 
-`Workspace` gains `models()` and `metric()`; module-level `wh.models()` /
-`wh.metric()` delegate to the default workspace as usual. No submodule/verb
-name collision (module `semantics`, verbs `models`/`metric`).
+`Workspace` gains `models()`, `model()`, and `frame()`; module-level
+`wh.models()` / `wh.model()` / `wh.frame()` delegate to the default
+workspace as usual. No submodule/verb name collision (module `semantics`,
+verbs `models`/`model`/`frame`; note module `frames.py` vs verb `frame` —
+different names, safe, but keep it that way).
 
 ## Config: `wh.yaml`
 
@@ -164,10 +157,11 @@ Load-time failures, all `SemanticsError(WhError)`:
 - unresolvable table → lists the tables the mirror actually has (BSL's own
   failure is a raw KeyError — unacceptable)
 
-Query-time: `metric()` validates requested dims/measures against the model's
-declared names first (BSL/Ibis errors list raw table columns, not semantic
-names — verified misleading). Genuine expression-evaluation errors still
-pass through.
+Query-time errors are BSL's, undiluted (no wrapper exists to intercept
+them). The known wart — bad dim/measure names produce an error listing raw
+table columns instead of semantic names — is an upstream issue to file
+against BSL, mitigated locally by the model repr showing declared
+dims/measures with descriptions.
 
 ## Interactions & constraints
 
@@ -198,25 +192,28 @@ pass through.
 - **Unit** (no extra needed): `semantics.dir` config parsing, missing-extra
   error message, scan order + duplicate detection on fixture YAML.
 - **DuckDB-real** (dev env installs the extra): fixture mirror + two model
-  files → `models()` binds; `metric()` returns correct **values** in the
-  preferred backend; the owned mapping specifically: raw-column filter
-  through `metric()` (pre-aggregation placement) returns correct values,
-  tuple `order_by` translation, unknown dim/measure → SemanticsError
-  listing declared names; cross-file join loads (merge-then-one-call);
-  dotted-schema binding; `register()`ed frame bound as a model table
-  (session-level, post-`reload=True`); unresolvable-table error lists
-  candidates; cache rebuild after `mirror()` AND after manual `close()`;
+  files → `models()` binds; a fluent BSL query through `wh.frame()` returns
+  correct **values** in the preferred backend (and `backend=` overrides);
+  `wh.model("nope")` → SemanticsError listing available models;
+  cross-file join loads (merge-then-one-call); dotted-schema binding;
+  `register()`ed frame bound as a model table (session-level,
+  post-`reload=True`); unresolvable-table error lists candidates; cache
+  rebuild after `mirror()` AND after manual `close()`;
   `models(reload=True)` picks up edits.
+- **frames-boundary unit tests** (no extra needed): `to_arrow` duck-types
+  any object with `.to_pyarrow()`; `wh.frame()` on plain frames/relations
+  behaves as a generic converter.
 - **Validation:** `wh validate` fails with a named file/model on a broken
   definition. No SQL Server involvement anywhere in this phase.
 
 ## Rollout (one phase, three tasks)
 
-1. `[semantics]` extra + `_ibis()` + `models()` loader (merge-then-one-call,
-   binding, errors, self-keying cache — no mirror hook needed).
-2. `metric()` mapping through the frames boundary (filter placement, name
-   validation, order_by translation).
-3. `wh validate` semantics check + docs (README example, CLAUDE.md notes).
+1. `[semantics]` extra + `_ibis()` + `models()`/`model()` loader
+   (merge-then-one-call, binding, errors, self-keying cache — no mirror
+   hook needed).
+2. `wh.frame()` + the `.to_pyarrow()` duck-type in `frames.to_arrow`.
+3. `wh validate` semantics check + docs (README example, CLAUDE.md notes,
+   upstream issue filed against BSL for the raw-column error message).
 
 Later, only if earned: Python model escape hatch as a packaged convention,
 freshness stamps on query results, BSL's chart helper.
