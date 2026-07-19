@@ -49,8 +49,8 @@ df = wh.frame(                                # frame() converts anything to you
 explicit row index, `(top, bottom)` for multi-row headers with merged cells,
 or `None`), and `skip_rows=`. Mixed-type columns degrade to strings rather
 than erroring — `wh.clean.numeric` sorts them out. Both readers work without
-a `wh.yaml` unless you use `land=`. Excel needs the extra:
-`uv add "warehouse-tools[excel] @ git+..."`.
+a `wh.yaml` unless you use `land=`. Excel needs the `[excel]` extra (see
+Install).
 
 `push()` only writes to schemas listed under `push.allow` in `wh.yaml`
 (`PushRefused` otherwise), takes three-part names (`Database.schema.table`),
@@ -68,7 +68,14 @@ connections to one file in a process, so don't open your own read-only ones;
 Into an analysis project:
 
 ```bash
-uv add git+<this-repo-url>          # or: uv add --editable /path/to/checkout
+# core (mirror, pull/land/register, push, csv)
+uv add "warehouse-tools @ git+https://github.com/druarnfield/wh"
+
+# with extras — excel reader and/or the semantic layer
+uv add "warehouse-tools[excel,semantics] @ git+https://github.com/druarnfield/wh"
+
+# working on wh itself
+uv add --editable /path/to/wh
 ```
 
 ## Configure
@@ -117,7 +124,7 @@ metadata lives in `_mirror.meta` inside the database.
 
 ## Semantic layer
 
-Install the extra (`warehouse-tools[semantics]`) and drop model YAML into
+Install the `[semantics]` extra (see Install) and drop model YAML into
 `semantics/` next to `wh.yaml` (dir configurable via `semantics: dir:`):
 
 ```yaml
