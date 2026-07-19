@@ -121,6 +121,7 @@ class Config:
     parquet_dir: Path
     tables: list[TableSpec] = field(default_factory=list)
     frames: str | None = None     # preferred pull() backend; None = auto
+    push_allow: list[str] = field(default_factory=list)   # "Database.schema"
 
 
 def _parse_source(name: str, raw: dict) -> Source:
@@ -182,6 +183,13 @@ def load_config(path: Path | str) -> Config:
     if frames is not None and frames not in VALID_FRAMES:
         raise ConfigError(f"defaults.frames must be one of {sorted(VALID_FRAMES)}")
 
+    push_allow = list((raw.get("push") or {}).get("allow") or [])
+    for entry in push_allow:
+        if len(str(entry).split(".")) != 2:
+            raise ConfigError(
+                f"push.allow entry '{entry}' must be 'Database.schema'"
+            )
+
     tables: list[TableSpec] = []
     seen: set[tuple[str, str]] = set()
     for i, t in enumerate(raw.get("tables") or []):
@@ -231,6 +239,7 @@ def load_config(path: Path | str) -> Config:
         parquet_dir=parquet_dir,
         tables=tables,
         frames=frames,
+        push_allow=push_allow,
     )
 
 

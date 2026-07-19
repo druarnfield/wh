@@ -107,6 +107,23 @@ def test_frames_invalid(tmp_path):
         load_config(write(tmp_path, cfg_dict))
 
 
+def test_push_allow_default_empty(tmp_path):
+    assert load_config(write(tmp_path, VALID)).push_allow == []
+
+
+def test_push_allow_parsed(tmp_path):
+    cfg_dict = {**VALID, "push": {"allow": ["Sandbox.dbo", "Sandbox.analysis"]}}
+    assert load_config(write(tmp_path, cfg_dict)).push_allow == [
+        "Sandbox.dbo", "Sandbox.analysis"
+    ]
+
+
+def test_push_allow_entry_must_be_two_part(tmp_path):
+    cfg_dict = {**VALID, "push": {"allow": ["Sandbox"]}}
+    with pytest.raises(ConfigError, match="Database.schema"):
+        load_config(write(tmp_path, cfg_dict))
+
+
 def test_missing_file_raises_configerror(tmp_path):
     with pytest.raises(ConfigError, match="cannot read"):
         load_config(tmp_path / "nope" / "wh.yaml")
