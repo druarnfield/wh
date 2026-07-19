@@ -30,3 +30,21 @@ def test_module_level_uses_discovery(project, monkeypatch):
 def test_module_workspace_explicit_path_bypasses_singleton(project):
     ws = wh.workspace(project / "wh.yaml")
     assert isinstance(ws, Workspace)
+
+
+def test_workspace_mirror_with_injected_extract(project):
+    import pyarrow as pa
+    ws = Workspace.load(project / "wh.yaml")
+    ws.mirror(extract=lambda spec: pa.table({"a": [1]}), log=lambda s: None)
+    con = ws.connect(read_only=True)
+    assert con.execute('SELECT a FROM "main"."t1"').fetchall() == [(1,)]
+    con.close()
+
+
+def test_freshness(project):
+    import pyarrow as pa
+    ws = Workspace.load(project / "wh.yaml")
+    ws.mirror(extract=lambda spec: pa.table({"a": [1]}), log=lambda s: None)
+    fresh = ws.freshness()
+    assert fresh.num_rows == 1
+    assert "extracted_at" in fresh.column_names
