@@ -36,8 +36,8 @@ class Workspace:
     def __init__(self, config: Config):
         self.config = config
         self._con: duckdb.DuckDBPyConnection | None = None
-        self._ibis_cache: tuple | None = None     # (con, ibis backend)
-        self._models_cache: tuple | None = None   # (ibis backend, models dict)
+        self._metrics_cache: tuple | None = None    # (yaml mtimes key, models)
+        self._metrics_checked: tuple | None = None  # (con, defs key, {model: warnings})
 
     @classmethod
     def load(cls, path: str | Path | None = None) -> "Workspace":
@@ -200,47 +200,61 @@ class Workspace:
 
         self.con.register(name, to_arrow(frame))
 
-    def _ibis(self):
-        """Ibis backend over the session connection. Self-keying cache:
-        rebuilt whenever the underlying connection object changed (mirror
-        swap, manual close(), death) — no invalidation hooks anywhere."""
-        from .semantics import _import_bsl
+    def _metric_models(self, reload: bool = False) -> dict:
+        """Loaded metric models. Self-keying cache on YAML paths + mtimes —
+        editing a file reloads automatically; no invalidation hooks."""
+        from .metrics.loader import load_definitions
 
-        con = self.con
-        if self._ibis_cache is None or self._ibis_cache[0] is not con:
-            _bsl, ibis = _import_bsl()
-            self._ibis_cache = (con, ibis.duckdb.from_connection(con))
-        return self._ibis_cache[1]
+        d = self.config.semantics_dir
+        if d is None or not d.is_dir():
+            key = None
+        else:
+            key = tuple(sorted(
+                (str(p), p.stat().st_mtime)
+                for p in [*d.glob("*.yml"), *d.glob("*.yaml")]
+            ))
+        if reload or self._metrics_cache is None or self._metrics_cache[0] != key:
+            loaded = (
+                load_definitions(d, self.config.fiscal_year_start) if key else {}
+            )
+            self._metrics_cache = (key, loaded)
+        return self._metrics_cache[1]
 
-    def models(self, reload: bool = False) -> dict:
-        """All semantic models, bound to the mirror. reload=True re-reads YAML."""
-        from .semantics import load_models
-
-        backend = self._ibis()
-        if reload or self._models_cache is None or self._models_cache[0] is not backend:
-            d = self.config.semantics_dir
-            loaded = load_models(d, backend) if d is not None and d.is_dir() else {}
-            self._models_cache = (backend, loaded)
-        return self._models_cache[1]
-
-    def model(self, name: str):
-        """One semantic model by name; BSL's fluent API hangs off it."""
+    def model(self, name: str, reload: bool = False):
+        """One metric model, bound to the mirror (bind checks run once per
+        connection). Slicing hangs off it: ws.model('x').slice(...)."""
         from .errors import SemanticsError
+        from .metrics.result import BoundModel
 
-        models = self.models()
+        models = self._metric_models(reload)
         if name not in models:
             available = ", ".join(sorted(models)) or (
                 f"none — add YAML files to {self.config.semantics_dir}"
             )
-            raise SemanticsError(f"no semantic model '{name}' (available: {available})")
-        return models[name]
+            raise SemanticsError(f"no metric model '{name}' (available: {available})")
+        return BoundModel(models[name], self)
 
-    def frame(self, obj, backend: str | None = None):
-        """Convert anything frame-ish (BSL query, ibis expr, pandas/polars,
-        DuckDB relation, Arrow) to the preferred backend."""
-        from .frames import from_arrow, to_arrow
+    def slice(self, model_name: str, **kwargs):
+        return self.model(model_name).slice(**kwargs)
 
-        return from_arrow(to_arrow(obj), self._backend(backend))
+    def _bind_warnings(self, model) -> list:
+        """Bind-check cache, self-keying on connection identity AND the loaded
+        definitions (YAML mtimes) — an mtime reload hands out new Models,
+        which must be re-checked, not trusted under a stale name key."""
+        from .metrics.checks import bind_checks
+
+        con = self.con
+        defs_key = self._metrics_cache[0] if self._metrics_cache else None
+        if (
+            self._metrics_checked is None
+            or self._metrics_checked[0] is not con
+            or self._metrics_checked[1] != defs_key
+        ):
+            self._metrics_checked = (con, defs_key, {})
+        cache = self._metrics_checked[2]
+        if model.name not in cache:
+            cache[model.name] = bind_checks(con, model)
+        return cache[model.name]
 
     def _backend(self, backend: str | None) -> str:
         from .frames import default_backend

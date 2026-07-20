@@ -123,6 +123,7 @@ class Config:
     frames: str | None = None     # preferred pull() backend; None = auto
     push_allow: list[str] = field(default_factory=list)   # "Database.schema"
     semantics_dir: Path | None = None   # set by load_config; absent dir = no models
+    fiscal_year_start: int = 1          # month FY starts (7 = July); folded into model hashes
 
 
 def _parse_source(name: str, raw: dict) -> Source:
@@ -245,7 +246,17 @@ def load_config(path: Path | str) -> Config:
         semantics_dir=(
             base / ((raw.get("semantics") or {}).get("dir", "semantics"))
         ).resolve(),
+        fiscal_year_start=_parse_fiscal_year_start(raw),
     )
+
+
+def _parse_fiscal_year_start(raw: dict) -> int:
+    v = (raw.get("semantics") or {}).get("fiscal_year_start", 1)
+    if not isinstance(v, int) or isinstance(v, bool) or not 1 <= v <= 12:
+        raise ConfigError(
+            f"semantics.fiscal_year_start must be an integer 1-12 (got {v!r})"
+        )
+    return v
 
 
 def find_config(start: Path | None = None) -> Path:

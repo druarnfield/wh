@@ -31,9 +31,7 @@ def main(argv: list[str] | None = None) -> int:
         cfg = load_config(args.config or find_config())
         if args.command == "validate":
             print(f"OK: {len(cfg.tables)} tables -> {cfg.duckdb_path}")
-            from .semantics import validate_semantics
-
-            summary = validate_semantics(cfg)
+            summary = _validate_metrics(cfg)
             if summary:
                 print(summary)
             return 0
@@ -42,6 +40,29 @@ def main(argv: list[str] | None = None) -> int:
     except WhError as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
+
+
+def _validate_metrics(cfg) -> str | None:
+    """Structure always; bind checks only when the mirror file exists."""
+    d = cfg.semantics_dir
+    if d is None or not d.is_dir():
+        return None
+    from .metrics.loader import load_definitions
+
+    models = load_definitions(d, cfg.fiscal_year_start)
+    if not models:
+        return None
+    n = f"{len(models)} metric model{'s' if len(models) > 1 else ''}"
+    if not cfg.duckdb_path.exists():
+        return f"{n} OK (structure only — no mirror file)"
+    from .metrics.checks import bind_checks
+
+    ws = Workspace(cfg)
+    try:
+        warnings = [w for m in models.values() for w in bind_checks(ws.con, m)]
+    finally:
+        ws.close()
+    return "\n".join([f"{n} OK (fully bound)"] + [f"warning: {w}" for w in warnings])
 
 
 if __name__ == "__main__":

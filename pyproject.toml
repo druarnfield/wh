@@ -14,10 +14,6 @@ dependencies = [
 
 [project.optional-dependencies]
 excel = ["python-calamine>=0.5"]
-semantics = [
-    "boring-semantic-layer>=0.3.15,<0.4",
-    "ibis-framework[duckdb]>=12",
-]
 
 [project.scripts]
 wh = "wh.cli:main"
@@ -29,16 +25,9 @@ build-backend = "uv_build"
 [tool.uv.build-backend]
 module-name = "wh"
 
-[tool.pytest.ini_options]
-filterwarnings = [
-    # ibis 12.x internally calls duckdb's deprecated fetch_arrow_table()
-    "ignore:fetch_arrow_table\\(\\) is deprecated:DeprecationWarning",
-]
-
 [dependency-groups]
 dev = [
-    "boring-semantic-layer>=0.3.15,<0.4",
-    "ibis-framework[duckdb]>=12.0.0",
+    "marimo>=0.23.14",
     "openpyxl>=3.1.5",
     "pandas>=3.0.3",
     "polars>=1.42.1",

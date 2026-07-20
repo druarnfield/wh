@@ -28,42 +28,96 @@ SQL Server. Excel/CSV readers for messy business files. Oracle later.
   readers, configless module-level fallback. Plan:
   `docs/plans/2026-07-19-warehouse-tools-phase4.md`.
 - Design fully delivered. Later: Oracle source, append/upsert push.
-- Semantics phase COMPLETE (2026-07-19): BSL integration —
-  `models()`/`model()`/`frame()`, `[semantics]` extra, validate check.
-  Design: `docs/plans/2026-07-19-semantics-design.md` (adversarially
-  reviewed); plan: `docs/plans/2026-07-19-semantics-phase.md`.
+- BSL semantic layer: built 2026-07-19, REMOVED 2026-07-20 (rejected —
+  not usable, design disagreed with). Upstream-bug knowledge preserved
+  in `docs/upstream/` and git history of `docs/plans/2026-07-19-semantics-*`.
+  `errors.SemanticsError` and `config.semantics_dir` survive for the
+  new layer.
+- Metrics phase 1 COMPLETE (2026-07-20): rollout steps 0–1 of
+  `docs/plans/2026-07-20-metrics-design.md` (plan:
+  `docs/plans/2026-07-20-metrics-phase1.md`). Delivered: `wh/metrics/`
+  package (loader / context_ops / timegrain / compiler / result /
+  checks), verbs `wh.model`/`wh.slice`/`wh.context`/`not_`/`last`/`all`,
+  two-lane compilation, snapshot global-max as-at, ratios, fiscal
+  grains, strict context, bind-time checks, `wh validate` hook, canary
+  invariant + lane-isolation test suites. Submodules never named after
+  verbs (`model`/`slice`/`context`/`frame` — shadowing gotcha).
+  Post-review hardening applied (see the fix commits of 2026-07-20).
+- Metrics phase 2 COMPLETE (2026-07-20): `compare=` (prior/yoy/fytd as
+  shifted CTEs self-joined back — never lag; fytd recomputed from base;
+  per-CTE as-at on snapshot models), `complete_periods` (cadence-aware
+  on snapshot models), `.suppress(n)` (hidden __cell_n per CTE; ratios
+  null when their den < n). Plan:
+  `docs/plans/2026-07-20-metrics-phase2.md`.
+- Metrics phase 3 COMPLETE (2026-07-20): provenance —
+  `Slice.provenance()` (measures+hashes, context buckets incl.
+  empty-selection, shape incl. non-additive + strictness-weakened,
+  schema fingerprints, _mirror.meta refresh stamps with honest absence,
+  scan coverage vs fact min, per-lane as-at, truncation note, DuckDB
+  version), semantic-projection measure hashes + model hashes in
+  `wh/metrics/provenance.py`. Plan:
+  `docs/plans/2026-07-20-metrics-phase3.md`.
+- Metrics phase 4 COMPLETE (2026-07-20): `BoundModel.values()` (+
+  `compile_values` — unscoped shared dims read the DIM TABLE only, no
+  fact scan; scoped goes through the lanes, no as-at, NULL never an
+  option), `filter_dim()` (mo.ui.multiselect; empty selection →
+  unfiltered via the existing widget semantics), `filter_date()`
+  (mo.ui.date_range over real fact bounds; .value fits time= exactly).
+  marimo is a lazy import (dev dep only); exclude-your-own-field is
+  `context=ctx.without(...)` — visible composition, never magic. Plan:
+  `docs/plans/2026-07-20-metrics-phase4.md`.
+  DESIGN FULLY DELIVERED (steps 0-4). Later per design: curated-schema
+  git hash stamp, `wh.compose()` for cross-fact derived numbers,
+  complementary suppression, context YAML round-trip.
+- Adversarial round 2 (2026-07-20) over steps 2-4: fixed fytd
+  cross-group contamination, month-end day-clamping in shifted compare
+  windows (shift the EXCLUSIVE bound), fytd FY-boundary leak at
+  straddling week/quarter periods (fy-equality join), CAST types
+  invisible to the hash projection, provenance datetime crash,
+  context-truncated periods surviving complete_periods. OPEN DECISION
+  for Dru: suppression thresholds cell rows, not per-measure filtered
+  counts (documented in the design doc's suppress note). KNOWN LIMIT:
+  monthly cadence completeness is a no-op at month grain (docstring'd).
+- Hash-stability contract: `_project()` in provenance.py KEEPS a known
+  scalar-key set and drops everything else — new serializer keys in a
+  DuckDB upgrade can't shift hashes; only structural renames could, and
+  the stamped duckdb version explains those. Don't "improve" it to
+  keep-all-minus-noise; the allowlist IS the stability mechanism.
 
-## Semantics notes
+## Metrics-layer notes (design invariants — keep these true)
 
-- wh owns NO query semantics: BSL's fluent API is the query language. An
-  earlier metric() kwargs wrapper was designed and deliberately killed —
-  do not reintroduce a query dialect.
-- Loading is merge-then-one-call (`from_config` on all files merged):
-  per-file `from_yaml` breaks cross-file join references. BSL 0.3.15
-  DECLARED-join querying is broken (poisons all queries on a joining
-  model); `test_join_dimension_query` is strict-xfail and will flag the
-  fixing release. QUERY-TIME joins work fully:
-  `wl.join_one(other, on=lambda l, r: l.raw_col == r.raw_col)` — on= gets
-  RAW tables, and dims are model-prefixed afterwards ("wl.specialty").
-  Do NOT build a shim replaying YAML joins: through join_one (query
-  dialect); recommend mirror-level pre-joins for centralised joins.
-  Upstream issue draft: docs/upstream/bsl-join-query-issue.md (not yet
-  filed — user to approve). Also to file: raw-column error messages;
-  case-only rename bug below; SemanticModel.schema property-vs-method LSP
-  break (crashes narwhals/marimo inspection — advise underscore-prefixed
-  marimo vars).
-- Case-only NAME collisions break BSL/ibis execution with obscure schema
-  errors — and it's broader than renames: any dim/measure name colliding
-  case-insensitively with ANY table column (even computed exprs). Two
-  guards: `merge_model_files` lints simple `_.Col` renames (no binding
-  needed), `_check_name_collisions` covers everything at bind time with
-  real columns in hand. Keep exact column case or a genuinely different name.
-- Caches are SELF-KEYING on connection/backend object identity (`ws.con is
-  cached_con`). Never add invalidation hooks — they miss reopen paths.
-- Module `semantics.py` vs verbs `models/model/frame`; `frames.py` module
-  vs `frame` verb — names differ deliberately (shadowing gotcha).
-- BSL is 0.x, pinned `>=0.3.15,<0.4`; churn (including YAML) is absorbed
-  in semantics.py only. Upgrades are deliberate.
+- Case-insensitive name collisions against real table columns caused
+  obscure engine errors in the BSL era; the new layer's bind-time checks
+  should keep guarding names with real columns in hand.
+- Caches are SELF-KEYING on connection object identity (`ws.con is
+  cached_con`) plus YAML mtimes. Never add invalidation hooks — they
+  miss reopen paths.
+- Two lanes are the guarantee: intrinsic `where` → `FILTER (WHERE ...)`,
+  context → outer `WHERE`; on snapshot models the as-at subquery carries
+  time predicates only. Tests assert this on parse trees with canary
+  literals — never on SQL text.
+- `json_serialize_sql` trees carry `query_location` keys that vary with
+  whitespace — `tests/metrics/treecheck.py` strips any `*location*` key
+  before comparing. Column refs are dicts with a `column_names` list.
+- tests/metrics helper code lives in uniquely-named modules
+  (`treecheck.py`, `fixtures_data.py`), NEVER imported from conftest —
+  two `conftest.py` files on sys.path make `import conftest` ambiguous.
+- Unresolved contexts (widgets, `wh.last`) resolve at slice time,
+  anchored to `max(time_column)` of the fact — mirror data, never wall
+  clock. Hash/serialise/provenance are defined over resolved contexts
+  only.
+- `datetime` IS a `date` subclass — `_lit` must test datetime BEFORE
+  date or timestamps silently render as `DATE '...'` and DuckDB floors
+  them (this moved snapshot as-at moments a week early pre-review).
+  Time ranges compile day-inclusive (`>= lo AND < hi + 1 day`), never
+  `BETWEEN ... DATE 'hi'`.
+- Aggregate detection trick: `SELECT <expr> FROM fact WHERE 1=0` yields
+  exactly 1 row for aggregates, 0 for per-row exprs (which GROUP BY ALL
+  would silently turn into grouping columns).
+- YAML names/columns are spliced into SQL unquoted — loader validates
+  them as plain identifiers (`fact`/`period`/`time` + `__*` reserved).
+  Adversarial review (2026-07-20) proved the injection: a measure named
+  `"n, wait_days AS smuggled"` regrouped a total into per-row output.
 
 ## Phase 4 notes
 
@@ -100,7 +154,12 @@ SQL Server. Excel/CSV readers for messy business files. Oracle later.
 ## Key documents
 
 - `docs/plans/2026-07-19-warehouse-tools-design.md` — agreed design. Read first.
-- `docs/plans/2026-07-19-warehouse-tools-phase1.md` — current implementation plan.
+- `docs/plans/2026-07-20-metrics-design.md` — the metrics layer design.
+- `docs/metrics.md` — metrics USER documentation (YAML reference, context
+  vocabulary, compare matrix, the "will not do" list). Keep it current in
+  the same commit as any surface change — README carries only the tour.
+- `semantics/waitlist.yml` — Dru's REAL metric models (tracked, validated
+  against the live mirror). Not a test fixture; edit with care.
 
 ## Commands
 
@@ -161,6 +220,8 @@ SQL Server. Excel/CSV readers for messy business files. Oracle later.
 
 ## Conventions
 
+- NO worktrees — never suggest or create them. Dru works on ordinary
+  branches in the main checkout; feature work happens right here.
 - TDD, strictly: failing test → verify fail → implement → verify pass → commit.
 - Never mention Claude in commit messages.
 - Notebook-friendly errors: all inherit `WhError`; one clear sentence + the fix.

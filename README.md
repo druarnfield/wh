@@ -34,15 +34,12 @@ df = wh.clean(raw,                       # composable cleaners, polars or pandas
 df = wh.read_csv("easy.csv")             # DuckDB's sniffing reader
 wh.read_excel("messy.xlsx", land="files.raw")   # or straight into the .duckdb
 
-# semantic layer (optional extra): define metrics once, same numbers everywhere
-wl = wh.model("waitlist")                     # from semantics/*.yml, bound to the mirror
-df = wh.frame(                                # frame() converts anything to your backend
-    wl.filter(_.Category == "1")
-      .group_by("Specialty")
-      .aggregate("patients_waiting", "median_wait_days")
-)
+# metrics layer: governed numbers from semantics/*.yml (see Metrics layer below)
+s = wh.slice("waitlist", measures=["patients_waiting"],
+             by=["specialty"], context=wh.context(time=wh.last(12, "month")))
+s.frame()
 
-# coming later: oracle source, append/upsert push
+# coming later: oracle source, append/upsert push, wh.compose()
 ```
 
 `read_excel` takes `sheet=` (name or index), `header=` (`"auto"` default, an
@@ -71,8 +68,8 @@ Into an analysis project:
 # core (mirror, pull/land/register, push, csv)
 uv add "warehouse-tools @ git+https://github.com/druarnfield/wh"
 
-# with extras — excel reader and/or the semantic layer
-uv add "warehouse-tools[excel,semantics] @ git+https://github.com/druarnfield/wh"
+# with the excel reader extra
+uv add "warehouse-tools[excel] @ git+https://github.com/druarnfield/wh"
 
 # working on wh itself
 uv add --editable /path/to/wh
@@ -114,7 +111,7 @@ See `wh.yaml` in this repo for a fuller example.
 ## CLI
 
 ```bash
-wh validate                 # parse the config and exit
+wh validate                 # check the config and the metric models
 wh mirror                   # full refresh (staging build, atomic swap)
 wh mirror --only waitlist   # refresh one table; the rest carry over
 ```
@@ -122,47 +119,43 @@ wh mirror --only waitlist   # refresh one table; the rest carry over
 A failed build never touches the live `.duckdb` or parquet files. Freshness
 metadata lives in `_mirror.meta` inside the database.
 
-## Semantic layer
+## Metrics layer
 
-Install the `[semantics]` extra (see Install) and drop model YAML into
-`semantics/` next to `wh.yaml` (dir configurable via `semantics: dir:`):
-
-```yaml
-waitlist:
-  table: outpatient_waitlist_current   # bare = main schema; files.x for others
-  dimensions:
-    Specialty: _.Specialty             # keep the column's exact case, or use
-    Category:                          # a genuinely different name — a case-
-      expr: _.Category                 # only rename is refused (upstream bug)
-      description: "Urgency category"
-  measures:
-    patients_waiting: _.PatUrnCoded.nunique()
-    median_wait_days: _.WaitingTime.median()
-```
-
-`wh` wraps no query API: [BSL's fluent
-API](https://github.com/boringdata/boring-semantic-layer) is the query
-language (`.filter/.group_by/.aggregate/.sql()`); `wh.model()` looks up,
-`wh.frame()` converts results (or any frame-ish object) to your backend.
-`wh validate` checks models — structure always, full binding when the
-mirror file exists.
-
-**Joins:** YAML-declared `joins:` load but querying them is broken upstream
-in BSL 0.3.15 (a strict-xfail test watches for the fix). Until then, two
-working options: pre-join at the mirror layer (a query-defined table in
-`wh.yaml` — best for joins you want centralised), or query-time joins via
-the fluent API, which work fully:
+Governed numbers over the mirror: measures are versioned, auditable YAML
+definitions over a fact table; slicing is free and flexible but
+structurally cannot change what a measure means (a measure's own `where`
+compiles into per-measure `FILTER` clauses, your filter context into the
+outer `WHERE` — different clauses, every query); every result carries
+full provenance. **Full guide: [docs/metrics.md](docs/metrics.md)** —
+YAML reference, the context vocabulary, comparisons, suppression,
+provenance, widgets, and the honest list of what the layer won't do.
+`semantics/waitlist.yml` in this repo is a real working example.
 
 ```python
-wl.join_one(clinics, on=lambda l, r: l.clinic_code == r.code) \
-  .group_by("clinics.region").aggregate("patients")   # dims prefixed after a join
+s = wh.slice("waitlist",
+             measures=["patients_waiting", "long_waiters"],
+             by=["specialty"], grain="month", compare=["prior", "yoy"],
+             context=wh.context(time=wh.last(12, "month"),
+                                category=wh.not_("Cat 3")),
+             complete_periods=True)
+s.frame()                   # your dataframe backend
+s.suppress(5).frame()       # small cells -> NULL, publishable
+s.sql                       # the exact generated SQL
+print(s.provenance().render())
+# patients_waiting [bd41e3 · model 488559] = count(DISTINCT PatUrnCoded) at snapshot
+# context: time in 2025-12-02..2026-06-01; category not Cat 3
+# by specialty · grain month · compare prior, yoy · complete periods only
+# prior: scan widened to 2025-11-02, fully covered
+# snapshot as-at 2026-06-01 (latest period) · prior as-at 2026-05-01 (latest period)
+# non-additive: patients_waiting — do not re-sum result rows
+# data main.outpatient_waitlist_snapshot as-at 2026-07-19 06:30
 ```
 
-**marimo note:** the variable panel can't inspect a bare semantic table
-(upstream: BSL overrides ibis's `schema()` method as a property, which
-breaks narwhals). Harmless but noisy — bind models to underscore-prefixed
-names (`_wl = wh.model(...)`), or chain inline and bind only the
-`wh.frame(...)` result.
+In marimo, widgets come from the declared surface — `m.filter_dim()`,
+`m.filter_date()`, `m.values()` — with empty selections meaning
+unfiltered and cascading as visible composition (see the guide).
+`wh validate` checks the models: structure always, full bind checks when
+the mirror file exists.
 
 ## Development
 
