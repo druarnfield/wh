@@ -43,6 +43,19 @@ def sql_str(text: str) -> str:
     return "'" + text.replace("'", "''") + "'"
 
 
+def _staging_connection(path: Path) -> duckdb.DuckDBPyConnection:
+    """Connection for the staging build.
+
+    preserve_insertion_order is disabled: with it on (the default), DuckDB
+    buffers an entire streamed Arrow source in memory before COPY/CTAS
+    writes anything. Mirrored tables have no meaningful row order, so the
+    streaming extract can flow straight to disk instead.
+    """
+    con = duckdb.connect(str(path))
+    con.execute("SET preserve_insertion_order = false")
+    return con
+
+
 def spec_hash(spec: TableSpec) -> str:
     payload = json.dumps(asdict(spec), sort_keys=True, default=str)
     return hashlib.sha256(payload.encode()).hexdigest()[:16]
@@ -146,7 +159,7 @@ def build(
     staging_db = staging_root / cfg.duckdb_path.name
     staging_parquet = staging_root / "parquet"
 
-    con = duckdb.connect(str(staging_db))
+    con = _staging_connection(staging_db)
     t0 = time.time()
     try:
         con.execute(META_DDL)
