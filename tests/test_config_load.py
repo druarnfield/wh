@@ -156,3 +156,20 @@ def test_bad_compression_raises(tmp_path):
     }]
     with pytest.raises(ConfigError, match="compression"):
         load_config(write(tmp_path, bad))
+
+
+def test_fiscal_year_start_default_is_calendar(tmp_path):
+    cfg = load_config(write(tmp_path, VALID))
+    assert cfg.fiscal_year_start == 1
+
+
+def test_fiscal_year_start_parsed(tmp_path):
+    d = {**VALID, "semantics": {"fiscal_year_start": 7}}
+    assert load_config(write(tmp_path, d)).fiscal_year_start == 7
+
+
+@pytest.mark.parametrize("bad", [0, 13, "july", True])
+def test_fiscal_year_start_invalid(tmp_path, bad):
+    d = {**VALID, "semantics": {"fiscal_year_start": bad}}
+    with pytest.raises(ConfigError, match="fiscal_year_start"):
+        load_config(write(tmp_path, d))
