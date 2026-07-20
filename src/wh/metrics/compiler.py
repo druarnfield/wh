@@ -15,7 +15,9 @@ from datetime import date, datetime, timedelta
 from ..errors import SemanticsError
 from .context_ops import All, Between, Context, Eq, In, Not, EMPTY, _months_back
 from .loader import Model
-from .timegrain import fy_start, grain_expr
+from .timegrain import PERIOD_INTERVAL, fy_start, grain_expr
+
+_CADENCE_DAYS = {"daily": 1, "weekly": 7, "monthly": 31}
 
 
 @dataclass(frozen=True)
@@ -323,6 +325,24 @@ def _indent(lines: list[str]) -> str:
     return "\n".join("    " + line for line in "\n".join(lines).splitlines())
 
 
+def _complete_predicate(model: Model, grain: str, period_ref: str) -> str:
+    """Keep only complete periods. Snapshot models with a declared cadence:
+    the period's final EXPECTED snapshot landed. Otherwise: the max-date
+    rule (period end within the data), which is weaker on snapshot models.
+    Data max comes from the fact — _mirror.meta records refresh time, not
+    data max."""
+    tc = model.time_column
+    period_end = f"{period_ref} + INTERVAL {PERIOD_INTERVAL[grain]} - INTERVAL 1 DAY"
+    if model.snapshot and model.cadence in _CADENCE_DAYS:
+        days = _CADENCE_DAYS[model.cadence]
+        g = grain_expr(grain, tc, model.fiscal_year_start)
+        return (
+            f"(SELECT max({tc}) FROM {model.fact} WHERE {g} = {period_ref})"
+            f" > {period_end} - INTERVAL {days} DAY"
+        )
+    return f"{period_end} <= (SELECT max({tc}) FROM {model.fact})"
+
+
 def compile_slice(
     model: Model,
     measures: list[str],
@@ -330,9 +350,12 @@ def compile_slice(
     ctx: Context = EMPTY,
     grain: str | None = None,
     compare: list[str] = (),
+    complete_periods: bool = False,
 ) -> Compiled:
     if not measures:
         raise SemanticsError("slice() needs at least one measure")
+    if complete_periods and grain is None:
+        raise SemanticsError("complete_periods needs grain= (periods to complete)")
     for name in measures:
         if name not in model.measures:
             raise SemanticsError(
@@ -349,15 +372,18 @@ def compile_slice(
     if compare:
         return _assemble_compare(
             model, measures, by, ctx_attrs, time_op, grain, compare,
-            lines, group_aliases, applied, ignored,
+            lines, group_aliases, applied, ignored, complete_periods,
         )
 
-    if has_ratio:
-        # division outermost, __num/__den carried beneath — never re-aggregated
+    if has_ratio or complete_periods:
+        # division/completeness live in an outer level; __num/__den carried
+        # beneath, never re-aggregated
         outer = list(group_aliases) + [
             _sel("", name, model.measures[name]) for name in measures
         ]
         lines = ["SELECT " + ",\n       ".join(outer), "FROM (", _indent(lines), ")"]
+        if complete_periods:
+            lines.append("WHERE " + _complete_predicate(model, grain, "period"))
     if grain is not None:
         lines.append("ORDER BY period")
     return Compiled(sql="\n".join(lines), applied=applied, ignored=ignored)
@@ -416,7 +442,7 @@ def _fytd_lines(model, measures, ctx_attrs, time_op, grain, group_aliases):
 
 def _assemble_compare(
     model, measures, by, ctx_attrs, time_op, grain, compare,
-    out_lines, group_aliases, applied, ignored,
+    out_lines, group_aliases, applied, ignored, complete_periods=False,
 ) -> Compiled:
     """Comparisons are shifted CTEs self-joined back — never lag, so gap
     periods stay NULL instead of slipping. Each CTE carries its own window
@@ -461,11 +487,15 @@ def _assemble_compare(
             proj.append(_sel(f"__cmp_{cmp}", mname, m, alias=f"{mname}_{cmp}"))
 
     with_block = ", ".join(f"{n} AS (\n{_indent(ls)}\n)" for n, ls in ctes)
+    tail = []
+    if complete_periods:
+        tail.append("WHERE " + _complete_predicate(model, grain, "b.period"))
     sql = "\n".join([
         "WITH " + with_block,
         "SELECT " + ",\n       ".join(proj),
         "FROM __out AS b",
         *joins,
+        *tail,
         "ORDER BY period",
     ])
     return Compiled(sql=sql, applied=applied, ignored=ignored, scan_lo=scan_lo)

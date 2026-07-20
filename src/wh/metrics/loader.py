@@ -174,6 +174,12 @@ def _parse_model(fname, name, spec, shared_dims, fiscal_year_start) -> Model:
             f"{fname}: model '{name}' needs 'time:' with a 'column:' key"
         )
     _check_column(fname, "time column", time["column"])
+    cadence = time.get("cadence")
+    if cadence is not None and cadence not in ("daily", "weekly", "monthly"):
+        raise SemanticsError(
+            f"{fname}: model '{name}': cadence must be daily, weekly or "
+            f"monthly (got {cadence!r})"
+        )
     snapshot = bool(spec.get("snapshot", False))
 
     dims: dict[str, DimRef] = {}

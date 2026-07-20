@@ -187,6 +187,53 @@ def test_fytd_respects_the_context_upper_bound(con, defs):
     ).scan_lo == {"fytd": date(2025, 7, 1)}                  # widened to FY start
 
 
+# --- Task 5: complete_periods ---
+
+
+def test_complete_periods_drops_the_trailing_partial_month(con, defs):
+    rows = run(con, compile_slice(
+        defs["removals"], ["removals"], grain="month", complete_periods=True,
+    ))
+    assert [r["period"] for r in rows] == [date(2026, 6, 1)]   # July (max 07-08) dropped
+
+
+def test_complete_periods_needs_grain(defs):
+    with pytest.raises(SemanticsError, match="grain"):
+        compile_slice(defs["removals"], ["removals"], complete_periods=True)
+
+
+def test_snapshot_cadence_completeness_beats_the_max_date_heuristic(con, make_defs):
+    """Weekly snapshots, last on the 28th of a 31-day month: the final
+    EXPECTED snapshot landed (complete under cadence), while the max-date
+    rule would call the month incomplete."""
+    con.execute(
+        "CREATE TABLE main.wl2 AS FROM (VALUES "
+        "(DATE '2026-07-07','A'), (DATE '2026-07-14','A'), "
+        "(DATE '2026-07-21','A'), (DATE '2026-07-28','A')) t(snap_date, ur)"
+    )
+    base = (
+        "wl2:\n  fact: main.wl2\n  time:\n    column: snap_date\n{cadence}"
+        "  snapshot: true\n"
+        "  measures:\n    n:\n      expr: count(DISTINCT ur)\n      description: d\n"
+    )
+    with_cadence = make_defs(base.format(cadence="    cadence: weekly\n"))["wl2"]
+    # yaml indent: cadence belongs under time:
+    rows = run(con, compile_slice(with_cadence, ["n"], grain="month", complete_periods=True))
+    assert [r["period"] for r in rows] == [date(2026, 7, 1)]   # complete
+
+    without = make_defs(base.format(cadence=""))["wl2"]
+    rows = run(con, compile_slice(without, ["n"], grain="month", complete_periods=True))
+    assert rows == []                                          # max-date rule: dropped
+
+
+def test_invalid_cadence_is_a_load_error(make_defs):
+    with pytest.raises(SemanticsError, match="cadence"):
+        make_defs(
+            "m:\n  fact: t\n  time:\n    column: c\n    cadence: fortnightly\n"
+            "  measures:\n    n:\n      expr: count(*)\n      description: d\n"
+        )
+
+
 # --- Task 3: snapshot comparisons carry their own as-at ---
 
 
