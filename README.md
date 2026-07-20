@@ -186,8 +186,31 @@ computed as shifted self-joins from base rows — gap periods stay NULL
 (never lag), snapshot periods each keep their own as-at, and `fytd`
 recomputes from the fiscal-year start so distinct counts stay honest.
 `complete_periods` understands snapshot cadence (`time: cadence: weekly`
-means "the final expected snapshot landed"). Coming next: provenance —
-every number explains itself.
+means "the final expected snapshot landed").
+
+Every number explains itself:
+
+```python
+p = s.provenance()
+p.measures       # (name, definition text, content hash) per measure
+p.context        # applied / ignored / empty-selection→unfiltered
+p.render()       # the report-footer block:
+# patients_waiting [b9b880 · model 58f744] = count(DISTINCT ur) at snapshot
+# context: time in 2025-07-01..2026-07-05; facility__region = North
+# by facility.region · grain month · compare prior
+# prior: scan widened to 2025-06-01, fact data begins 2026-06-05 — partially uncovered
+# snapshot as-at 2026-07-03 (latest period)
+# final period truncated by context (as at 2026-07-05)
+# non-additive: patients_waiting — do not re-sum result rows
+p.to_dict()      # stampable into outputs (Excel footer, push metadata)
+```
+
+Measure hashes cover a semantic projection of the parse tree (formatting
+and serializer noise can't shift them; the running DuckDB version is
+stamped so an engine-caused shift is explainable); the model hash covers
+everything else that determines results (`snapshot`, time column,
+dim mappings, `fiscal_year_start`). Definition version = the pair.
+Coming next: marimo widget helpers.
 
 ## Development
 

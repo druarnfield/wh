@@ -49,9 +49,22 @@ SQL Server. Excel/CSV readers for messy business files. Oracle later.
   on snapshot models), `.suppress(n)` (hidden __cell_n per CTE; ratios
   null when their den < n). Plan:
   `docs/plans/2026-07-20-metrics-phase2.md`.
-  NEXT: step 3 (provenance + content hashing — scan_lo widening and
-  applied/ignored bookkeeping already recorded on Compiled for it),
-  then step 4 (marimo widgets).
+- Metrics phase 3 COMPLETE (2026-07-20): provenance —
+  `Slice.provenance()` (measures+hashes, context buckets incl.
+  empty-selection, shape incl. non-additive + strictness-weakened,
+  schema fingerprints, _mirror.meta refresh stamps with honest absence,
+  scan coverage vs fact min, per-lane as-at, truncation note, DuckDB
+  version), semantic-projection measure hashes + model hashes in
+  `wh/metrics/provenance.py`. Plan:
+  `docs/plans/2026-07-20-metrics-phase3.md`.
+  NEXT: step 4 (marimo widget helpers: `m.filter_dim()`,
+  `m.filter_date()`, possible-values composition). Later per design:
+  curated-schema git hash stamp, `wh.compose()`, context YAML round-trip.
+- Hash-stability contract: `_project()` in provenance.py KEEPS a known
+  scalar-key set and drops everything else — new serializer keys in a
+  DuckDB upgrade can't shift hashes; only structural renames could, and
+  the stamped duckdb version explains those. Don't "improve" it to
+  keep-all-minus-noise; the allowlist IS the stability mechanism.
 
 ## Metrics-layer notes (design invariants — keep these true)
 
