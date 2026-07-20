@@ -210,7 +210,27 @@ and serializer noise can't shift them; the running DuckDB version is
 stamped so an engine-caused shift is explainable); the model hash covers
 everything else that determines results (`snapshot`, time column,
 dim mappings, `fiscal_year_start`). Definition version = the pair.
-Coming next: marimo widget helpers.
+
+In marimo, widgets come from the declared surface:
+
+```python
+m = wh.model("waitlist")
+region = m.filter_dim("facility.region")        # populated multiselect —
+region                                           # options from the dim table
+dates = m.filter_date()                          # date range with real bounds
+
+ctx = wh.context(facility__region=region, time=dates)   # widgets read at slice time
+m.slice(measures=["patients_waiting"], by=["doctor.specialty"], context=ctx).frame()
+
+# cascading / exclude-your-own-field is composition, not magic:
+clinic = m.filter_dim("facility.clinic", context=ctx.without("facility__clinic"))
+m.values("facility.clinic", context=ctx)         # the raw list, no marimo needed
+```
+
+An empty widget selection means unfiltered (recorded in provenance);
+a literal empty list is an error — that distinction is the safety
+mechanism, not a quirk. Later: `wh.compose()` for cross-fact numbers,
+curated-schema git hash in provenance, saved report contexts.
 
 ## Development
 

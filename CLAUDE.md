@@ -57,9 +57,18 @@ SQL Server. Excel/CSV readers for messy business files. Oracle later.
   version), semantic-projection measure hashes + model hashes in
   `wh/metrics/provenance.py`. Plan:
   `docs/plans/2026-07-20-metrics-phase3.md`.
-  NEXT: step 4 (marimo widget helpers: `m.filter_dim()`,
-  `m.filter_date()`, possible-values composition). Later per design:
-  curated-schema git hash stamp, `wh.compose()`, context YAML round-trip.
+- Metrics phase 4 COMPLETE (2026-07-20): `BoundModel.values()` (+
+  `compile_values` — unscoped shared dims read the DIM TABLE only, no
+  fact scan; scoped goes through the lanes, no as-at, NULL never an
+  option), `filter_dim()` (mo.ui.multiselect; empty selection →
+  unfiltered via the existing widget semantics), `filter_date()`
+  (mo.ui.date_range over real fact bounds; .value fits time= exactly).
+  marimo is a lazy import (dev dep only); exclude-your-own-field is
+  `context=ctx.without(...)` — visible composition, never magic. Plan:
+  `docs/plans/2026-07-20-metrics-phase4.md`.
+  DESIGN FULLY DELIVERED (steps 0-4). Later per design: curated-schema
+  git hash stamp, `wh.compose()` for cross-fact derived numbers,
+  complementary suppression, context YAML round-trip.
 - Hash-stability contract: `_project()` in provenance.py KEEPS a known
   scalar-key set and drops everything else — new serializer keys in a
   DuckDB upgrade can't shift hashes; only structural renames could, and
