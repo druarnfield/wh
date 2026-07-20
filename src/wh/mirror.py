@@ -24,12 +24,9 @@ from .errors import ConfigError
 
 Extract = Callable[[TableSpec], Any]
 
-# Parquet row groups default to 122,880 ROWS, buffered uncompressed per
-# writer thread before flushing — on wide NVARCHAR tables that is ~GBs of
-# peak memory for a modest row count. A byte cap keeps writer memory
-# proportional to row width; slim tables hit the row cap first (well under
-# this) and are unaffected.
-PARQUET_ROW_GROUP_BYTES = "100MB"
+# pyarrow codec names differ from wh.yaml's (DuckDB-flavoured) vocabulary
+_PYARROW_CODEC = {"uncompressed": "none", "lz4_raw": "lz4"}
+_LEVELED_CODECS = {"zstd", "gzip", "brotli"}
 
 META_DDL = """
 CREATE SCHEMA IF NOT EXISTS _mirror;
@@ -68,6 +65,28 @@ def spec_hash(spec: TableSpec) -> str:
     return hashlib.sha256(payload.encode()).hexdigest()[:16]
 
 
+def _write_parquet(src: Any, path: Path, spec: TableSpec) -> None:
+    """Stream Arrow batches straight to parquet — one row group per batch.
+
+    This is the constant-memory lane, so DuckDB stays out of it: its COPY
+    buffers a row group per writer thread and pins the zero-copied Arrow
+    batches underneath, so peak memory scales with core count x row width
+    (~GBs on wide tables). Writing directly keeps the peak at ~one extract
+    batch; `batch_size` in wh.yaml is the knob for very wide tables.
+    """
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    batches = src.to_batches() if isinstance(src, pa.Table) else src
+    codec = _PYARROW_CODEC.get(spec.compression, spec.compression)
+    level = spec.compression_level if codec in _LEVELED_CODECS else None
+    with pq.ParquetWriter(
+        str(path), src.schema, compression=codec, compression_level=level
+    ) as writer:
+        for batch in batches:
+            writer.write_batch(batch)
+
+
 def _load_table(
     con: duckdb.DuckDBPyConnection,
     extract: Extract,
@@ -82,9 +101,9 @@ def _load_table(
     """
     con.execute(f'CREATE SCHEMA IF NOT EXISTS "{spec.schema_in_duckdb}"')
     src = extract(spec)
-    con.register("_mirror_src", src)
-    try:
-        if spec.mode == "native":
+    if spec.mode == "native":
+        con.register("_mirror_src", src)
+        try:
             con.execute(f"CREATE TABLE {spec.qualified} AS SELECT * FROM _mirror_src")
             if spec.description:
                 con.execute(
@@ -92,18 +111,13 @@ def _load_table(
                 )
             (count,) = con.execute(f"SELECT count(*) FROM {spec.qualified}").fetchone()
             return count, None
+        finally:
+            con.unregister("_mirror_src")
 
-        rel_path = Path(spec.schema_in_duckdb) / f"{spec.name}.parquet"
-        staging_file = staging_parquet_dir / rel_path
-        staging_file.parent.mkdir(parents=True, exist_ok=True)
-        con.execute(
-            f"COPY (SELECT * FROM _mirror_src) TO {sql_str(str(staging_file))} "
-            f"(FORMAT PARQUET, COMPRESSION {spec.compression}, "
-            f"COMPRESSION_LEVEL {spec.compression_level}, "
-            f"ROW_GROUP_SIZE_BYTES '{PARQUET_ROW_GROUP_BYTES}')"
-        )
-    finally:
-        con.unregister("_mirror_src")
+    rel_path = Path(spec.schema_in_duckdb) / f"{spec.name}.parquet"
+    staging_file = staging_parquet_dir / rel_path
+    staging_file.parent.mkdir(parents=True, exist_ok=True)
+    _write_parquet(src, staging_file, spec)
 
     (count,) = con.execute(
         f"SELECT count(*) FROM read_parquet({sql_str(str(staging_file))})"
