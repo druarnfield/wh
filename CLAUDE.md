@@ -42,8 +42,16 @@ SQL Server. Excel/CSV readers for messy business files. Oracle later.
   grains, strict context, bind-time checks, `wh validate` hook, canary
   invariant + lane-isolation test suites. Submodules never named after
   verbs (`model`/`slice`/`context`/`frame` — shadowing gotcha).
-  NEXT: rollout step 2 (`compare=`, `complete_periods`, `.suppress()`),
-  then step 3 (provenance + hashing), step 4 (marimo widgets).
+  Post-review hardening applied (see the fix commits of 2026-07-20).
+- Metrics phase 2 COMPLETE (2026-07-20): `compare=` (prior/yoy/fytd as
+  shifted CTEs self-joined back — never lag; fytd recomputed from base;
+  per-CTE as-at on snapshot models), `complete_periods` (cadence-aware
+  on snapshot models), `.suppress(n)` (hidden __cell_n per CTE; ratios
+  null when their den < n). Plan:
+  `docs/plans/2026-07-20-metrics-phase2.md`.
+  NEXT: step 3 (provenance + content hashing — scan_lo widening and
+  applied/ignored bookkeeping already recorded on Compiled for it),
+  then step 4 (marimo widgets).
 
 ## Metrics-layer notes (design invariants — keep these true)
 

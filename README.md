@@ -170,8 +170,24 @@ clock), widgets accepted directly (`.value` read at slice time). Fiscal
 grains (`fy`, `fy_quarter`, July start etc.) come from
 `semantics: fiscal_year_start:` in `wh.yaml`. `wh validate` checks the
 models — structure always, full bind checks (dim-key uniqueness, orphan
-keys, intrinsic-where rules) when the mirror file exists. Coming next:
-`compare=` (yoy/fytd), `complete_periods`, suppression, provenance.
+keys, intrinsic-where rules) when the mirror file exists.
+
+Comparisons, completeness, suppression:
+
+```python
+s = wh.slice("removals", measures=["removals"], by=["facility.region"],
+             grain="month", compare=["prior", "yoy", "fytd"],
+             complete_periods=True)      # drop the trailing partial period
+s.suppress(5).frame()                    # small cells -> NULL (ratios too)
+```
+
+`compare=` columns hold the comparison *value* (`removals_yoy` etc.),
+computed as shifted self-joins from base rows — gap periods stay NULL
+(never lag), snapshot periods each keep their own as-at, and `fytd`
+recomputes from the fiscal-year start so distinct counts stay honest.
+`complete_periods` understands snapshot cadence (`time: cadence: weekly`
+means "the final expected snapshot landed"). Coming next: provenance —
+every number explains itself.
 
 ## Development
 

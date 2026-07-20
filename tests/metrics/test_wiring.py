@@ -80,6 +80,18 @@ def test_yaml_reload_reruns_bind_checks(metric_project):
     ws.close()
 
 
+def test_step2_surface_end_to_end(metric_project):
+    ws = Workspace.load(metric_project / "wh.yaml")
+    s = ws.slice(
+        "removals", measures=["removals"], by=["facility.region"],
+        grain="month", compare=["prior", "fytd"], complete_periods=True,
+    )
+    t = s.suppress(2).frame(backend="pyarrow")
+    assert {"removals", "removals_prior", "removals_fytd"} <= set(t.column_names)
+    assert all(str(p) == "2026-06-01" for p in t.column("period").to_pylist())
+    ws.close()
+
+
 def test_module_verbs_exist():
     assert callable(wh.model) and callable(wh.slice) and callable(wh.context)
     assert callable(wh.not_) and callable(wh.last) and callable(wh.all)
