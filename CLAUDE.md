@@ -154,7 +154,12 @@ SQL Server. Excel/CSV readers for messy business files. Oracle later.
 ## Key documents
 
 - `docs/plans/2026-07-19-warehouse-tools-design.md` — agreed design. Read first.
-- `docs/plans/2026-07-19-warehouse-tools-phase1.md` — current implementation plan.
+- `docs/plans/2026-07-20-metrics-design.md` — the metrics layer design.
+- `docs/metrics.md` — metrics USER documentation (YAML reference, context
+  vocabulary, compare matrix, the "will not do" list). Keep it current in
+  the same commit as any surface change — README carries only the tour.
+- `semantics/waitlist.yml` — Dru's REAL metric models (tracked, validated
+  against the live mirror). Not a test fixture; edit with care.
 
 ## Commands
 

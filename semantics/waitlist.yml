@@ -1,24 +1,58 @@
+# Metric models over the mirror — see docs/metrics.md for the full YAML
+# reference. `uv run wh validate` checks these (structure always, full
+# bind checks against metrics.duckdb when it exists).
+
 waitlist:
-  table: outpatient_waitlist_current
-  description: "Current outpatient waitlist, one row per waiting-list entry"
-  dimensions:
-    # dim names keep the column's exact case: a case-only rename (e.g.
-    # specialty: _.Specialty) breaks query execution upstream — wh refuses it
-    Specialty:
-      expr: _.Specialty
-      description: "Clinical specialty of the referral"
-    ServiceGroup: _.ServiceGroup
-    Facility: _.Facility
-    Category:
-      expr: _.Category
-      description: "Urgency category"
+  fact: main.outpatient_waitlist_snapshot
+  description: "Monthly outpatient waitlist censuses, one row per entry"
+  time:
+    column: CensusDate
+    cadence: monthly
+  snapshot: true                  # stock: every slice reads one census per period
+
+  dimensions:                     # local (degenerate) dims — fact columns
+    specialty: Specialty
+    service_group: ServiceGroup
+    facility: Facility
+    category: Category
+
   measures:
     patients_waiting:
-      expr: _.PatUrnCoded.nunique()
-      description: "Distinct patients on the list"
+      expr: count(DISTINCT PatUrnCoded)
+      description: "Distinct patients on the list at census"
     entries:
-      expr: _.count()
-      description: "Waiting-list entries (a patient can hold several)"
+      expr: count(*)
+      description: "Waiting-list entries at census (a patient can hold several)"
+    long_waiters:
+      expr: count(*)
+      where: WaitingTime > 365    # intrinsic — part of this measure's identity
+      description: "Entries waiting beyond 365 days at census"
     median_wait_days:
-      expr: _.WaitingTime.median()
-      description: "Median waiting time in days"
+      expr: median(WaitingTime)
+      time_agg: none              # a median supports no comparison windows
+      description: "Median waiting time in days at census"
+
+waitlist_current:
+  fact: main.outpatient_waitlist_current
+  description: "The latest waitlist census (single CensusDate)"
+  time:
+    column: CensusDate
+  snapshot: true
+
+  dimensions:
+    specialty: Specialty
+    service_group: ServiceGroup
+    facility: Facility
+    category: Category
+
+  measures:
+    patients_waiting:
+      expr: count(DISTINCT PatUrnCoded)
+      description: "Distinct patients on the current list"
+    entries:
+      expr: count(*)
+      description: "Waiting-list entries on the current list"
+    median_wait_days:
+      expr: median(WaitingTime)
+      time_agg: none
+      description: "Median waiting time in days on the current list"

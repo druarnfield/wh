@@ -36,10 +36,10 @@ wh.read_excel("messy.xlsx", land="files.raw")   # or straight into the .duckdb
 
 # metrics layer: governed numbers from semantics/*.yml (see Metrics layer below)
 s = wh.slice("waitlist", measures=["patients_waiting"],
-             by=["facility.region"], context=wh.context(time=wh.last(12, "month")))
+             by=["specialty"], context=wh.context(time=wh.last(12, "month")))
 s.frame()
 
-# coming later: compare=/provenance, oracle source, append/upsert push
+# coming later: oracle source, append/upsert push, wh.compose()
 ```
 
 `read_excel` takes `sheet=` (name or index), `header=` (`"auto"` default, an
@@ -111,7 +111,7 @@ See `wh.yaml` in this repo for a fuller example.
 ## CLI
 
 ```bash
-wh validate                 # parse the config and exit
+wh validate                 # check the config and the metric models
 wh mirror                   # full refresh (staging build, atomic swap)
 wh mirror --only waitlist   # refresh one table; the rest carry over
 ```
@@ -121,116 +121,41 @@ metadata lives in `_mirror.meta` inside the database.
 
 ## Metrics layer
 
-Versioned measure definitions over fact tables, with slicing that
-structurally cannot alter a measure's meaning: a measure's intrinsic
-`where` compiles into per-measure `FILTER` clauses, your filter context
-compiles into the outer `WHERE`, and snapshot models always evaluate at
-one global as-at moment per period. Design (worth reading):
-`docs/plans/2026-07-20-metrics-design.md`.
-
-Drop model YAML into `semantics/` next to `wh.yaml`:
-
-```yaml
-dimensions:                 # shared/conformed — defined once
-  facility:
-    table: main.clinic_dim
-    key_column: clinic_code
-    attributes: {clinic: clinic_name, region: region}
-    hierarchy: [clinic, region]
-
-waitlist:
-  fact: main.waitlist
-  time: {column: snapshot_date, cadence: weekly}
-  snapshot: true            # stock: last-snapshot row selection, always
-  dimensions:
-    facility: clinic_code   # shared dim: fact-side key only
-    urgency: urgency_category
-  measures:
-    patients_waiting:
-      expr: count(DISTINCT ur)
-      description: "Distinct patients on the list at snapshot"
-    long_waiters:
-      expr: count(*)
-      where: wait_days > 365          # intrinsic — part of the definition
-      description: "Waiting beyond 365 days at snapshot"
-```
+Governed numbers over the mirror: measures are versioned, auditable YAML
+definitions over a fact table; slicing is free and flexible but
+structurally cannot change what a measure means (a measure's own `where`
+compiles into per-measure `FILTER` clauses, your filter context into the
+outer `WHERE` — different clauses, every query); every result carries
+full provenance. **Full guide: [docs/metrics.md](docs/metrics.md)** —
+YAML reference, the context vocabulary, comparisons, suppression,
+provenance, widgets, and the honest list of what the layer won't do.
+`semantics/waitlist.yml` in this repo is a real working example.
 
 ```python
-ctx = wh.context(facility__region="North", time=("2025-07-01", "2026-06-30"))
-s = wh.slice("waitlist", measures=["patients_waiting", "long_waiters"],
-             by=["facility.region"], context=ctx, grain="month")
-s.frame()          # your preferred backend
-s.sql              # the exact generated SQL — two lanes, visibly separate
-s.view("summary")  # register for marimo SQL cells
-```
-
-Contexts are values: `ctx.with_(...)`, `ctx.without(...)`, `ctx | other`,
-`wh.not_(x)`, `wh.last(12, "month")` (anchored to mirror data, not wall
-clock), widgets accepted directly (`.value` read at slice time). Fiscal
-grains (`fy`, `fy_quarter`, July start etc.) come from
-`semantics: fiscal_year_start:` in `wh.yaml`. `wh validate` checks the
-models — structure always, full bind checks (dim-key uniqueness, orphan
-keys, intrinsic-where rules) when the mirror file exists.
-
-Comparisons, completeness, suppression:
-
-```python
-s = wh.slice("removals", measures=["removals"], by=["facility.region"],
-             grain="month", compare=["prior", "yoy", "fytd"],
-             complete_periods=True)      # drop the trailing partial period
-s.suppress(5).frame()                    # small cells -> NULL (ratios too)
-```
-
-`compare=` columns hold the comparison *value* (`removals_yoy` etc.),
-computed as shifted self-joins from base rows — gap periods stay NULL
-(never lag), snapshot periods each keep their own as-at, and `fytd`
-recomputes from the fiscal-year start so distinct counts stay honest.
-`complete_periods` understands snapshot cadence (`time: cadence: weekly`
-means "the final expected snapshot landed").
-
-Every number explains itself:
-
-```python
-p = s.provenance()
-p.measures       # (name, definition text, content hash) per measure
-p.context        # applied / ignored / empty-selection→unfiltered
-p.render()       # the report-footer block:
-# patients_waiting [b9b880 · model 58f744] = count(DISTINCT ur) at snapshot
-# context: time in 2025-07-01..2026-07-05; facility__region = North
-# by facility.region · grain month · compare prior
-# prior: scan widened to 2025-06-01, fact data begins 2026-06-05 — partially uncovered
-# snapshot as-at 2026-07-03 (latest period)
-# final period truncated by context (as at 2026-07-05)
+s = wh.slice("waitlist",
+             measures=["patients_waiting", "long_waiters"],
+             by=["specialty"], grain="month", compare=["prior", "yoy"],
+             context=wh.context(time=wh.last(12, "month"),
+                                category=wh.not_("Cat 3")),
+             complete_periods=True)
+s.frame()                   # your dataframe backend
+s.suppress(5).frame()       # small cells -> NULL, publishable
+s.sql                       # the exact generated SQL
+print(s.provenance().render())
+# patients_waiting [bd41e3 · model 488559] = count(DISTINCT PatUrnCoded) at snapshot
+# context: time in 2025-12-02..2026-06-01; category not Cat 3
+# by specialty · grain month · compare prior, yoy · complete periods only
+# prior: scan widened to 2025-11-02, fully covered
+# snapshot as-at 2026-06-01 (latest period) · prior as-at 2026-05-01 (latest period)
 # non-additive: patients_waiting — do not re-sum result rows
-p.to_dict()      # stampable into outputs (Excel footer, push metadata)
+# data main.outpatient_waitlist_snapshot as-at 2026-07-19 06:30
 ```
 
-Measure hashes cover a semantic projection of the parse tree (formatting
-and serializer noise can't shift them; the running DuckDB version is
-stamped so an engine-caused shift is explainable); the model hash covers
-everything else that determines results (`snapshot`, time column,
-dim mappings, `fiscal_year_start`). Definition version = the pair.
-
-In marimo, widgets come from the declared surface:
-
-```python
-m = wh.model("waitlist")
-region = m.filter_dim("facility.region")        # populated multiselect —
-region                                           # options from the dim table
-dates = m.filter_date()                          # date range with real bounds
-
-ctx = wh.context(facility__region=region, time=dates)   # widgets read at slice time
-m.slice(measures=["patients_waiting"], by=["doctor.specialty"], context=ctx).frame()
-
-# cascading / exclude-your-own-field is composition, not magic:
-clinic = m.filter_dim("facility.clinic", context=ctx.without("facility__clinic"))
-m.values("facility.clinic", context=ctx)         # the raw list, no marimo needed
-```
-
-An empty widget selection means unfiltered (recorded in provenance);
-a literal empty list is an error — that distinction is the safety
-mechanism, not a quirk. Later: `wh.compose()` for cross-fact numbers,
-curated-schema git hash in provenance, saved report contexts.
+In marimo, widgets come from the declared surface — `m.filter_dim()`,
+`m.filter_date()`, `m.values()` — with empty selections meaning
+unfiltered and cascading as visible composition (see the guide).
+`wh validate` checks the models: structure always, full bind checks when
+the mirror file exists.
 
 ## Development
 
