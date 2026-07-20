@@ -32,6 +32,16 @@ SQL Server. Excel/CSV readers for messy business files. Oracle later.
   `models()`/`model()`/`frame()`, `[semantics]` extra, validate check.
   Design: `docs/plans/2026-07-19-semantics-design.md` (adversarially
   reviewed); plan: `docs/plans/2026-07-19-semantics-phase.md`.
+- BSL VERDICT (2026-07-20): rejected — not usable, design disagreed
+  with. To be REMOVED (rollout step 0 of the metrics design). The
+  "Semantics notes" section below is historical until removal lands;
+  delete it in the same commit that removes `semantics.py`.
+- Metrics greenfield design AGREED (2026-07-20):
+  `docs/plans/2026-07-20-metrics-design.md` — home-grown two-lane
+  metrics layer (intrinsic FILTER vs extrinsic WHERE, compute-from-base,
+  declared surface, content-hashed provenance) replacing BSL. New module
+  will be `metrics.py` (never `model.py`/`slice.py` — verb shadowing).
+  Next: implementation plan for rollout steps 0–1.
 
 ## Semantics notes
 
