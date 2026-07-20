@@ -24,13 +24,24 @@ class Slice:
         strict_context: bool | None = None,
         con=None,                    # zero-arg callable -> DuckDB connection
         preferred_backend: str | None = None,
+        compare: list[str] = (),
+        complete_periods: bool = False,
+        suppress: int | None = None,
     ):
         self._model = model
         self._con = con
         self._preferred_backend = preferred_backend
         if not ctx.is_resolved:
             ctx = ctx.resolve(anchor=self._anchor())
-        self._compiled = compile_slice(model, measures, by=by, ctx=ctx, grain=grain)
+        self._args = dict(
+            measures=measures, by=by, ctx=ctx, grain=grain,
+            strict_context=strict_context, compare=compare,
+            complete_periods=complete_periods, suppress=suppress,
+        )
+        self._compiled = compile_slice(
+            model, measures, by=by, ctx=ctx, grain=grain, compare=compare,
+            complete_periods=complete_periods, suppress=suppress,
+        )
         strict = model.strict_context if strict_context is None else strict_context
         if strict and self._compiled.ignored:
             raise SemanticsError(
@@ -70,6 +81,15 @@ class Slice:
             table, backend or self._preferred_backend or default_backend()
         )
 
+    def suppress(self, n: int = 5) -> "Slice":
+        """A new Slice with small-cell suppression: cells under n rows read
+        NULL, and ratios with denominators under n too."""
+        return Slice(
+            self._model, con=self._con,
+            preferred_backend=self._preferred_backend,
+            **{**self._args, "suppress": n},
+        )
+
     def view(self, name: str) -> None:
         """Register as a DuckDB view (for marimo SQL cells)."""
         qname = '"' + name.replace('"', '""') + '"'
@@ -102,11 +122,14 @@ class BoundModel:
         context: Context = EMPTY,
         grain: str | None = None,
         strict_context: bool | None = None,
+        compare: list[str] = (),
+        complete_periods: bool = False,
     ) -> Slice:
         self._ws._bind_warnings(self._model)     # validate before first query
         return Slice(
             self._model, measures, by=by, ctx=context, grain=grain,
-            strict_context=strict_context,
+            strict_context=strict_context, compare=compare,
+            complete_periods=complete_periods,
             con=lambda: self._ws.con,
             preferred_backend=self._ws.config.frames,
         )

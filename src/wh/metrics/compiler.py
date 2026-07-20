@@ -257,9 +257,10 @@ def _asat_join(model: Model, grain: str | None, time_op) -> list[str]:
     ]
 
 
-def _inner_lines(model, measures, by, ctx_attrs, time_op, grain):
+def _inner_lines(model, measures, by, ctx_attrs, time_op, grain, cell_n=False):
     """One aggregate query (SELECT ... GROUP BY ALL, no ORDER BY) — reused
-    per comparison CTE with a shifted time_op.
+    per comparison CTE with a shifted time_op. cell_n adds the hidden
+    per-cell row count that suppression reads.
     -> (lines, group_aliases, has_ratio)."""
     select: list[str] = []
     joined: set[str] = set()
@@ -283,6 +284,8 @@ def _inner_lines(model, measures, by, ctx_attrs, time_op, grain):
             select.append(f"{m.ratio[1]} AS __{name}_den")
         else:
             select.append(f"{_measure_sql(m)} AS {name}")
+    if cell_n:
+        select.append("count(*) AS __cell_n")
 
     predicates: list[str] = []
     if time_op is not None:
@@ -311,13 +314,26 @@ def _inner_lines(model, measures, by, ctx_attrs, time_op, grain):
     return lines, group_aliases, has_ratio
 
 
-def _sel(prefix: str, name: str, m, alias: str | None = None) -> str:
+def _sel(prefix: str, name: str, m, alias: str | None = None,
+         suppress: int | None = None) -> str:
     """Outer-select item for a measure column living in `prefix` (a CTE
-    alias, or '' inside the plain ratio wrapper)."""
+    alias, or '' inside the plain wrapper). With suppress, values from
+    cells under n rows go NULL — and a ratio also nulls when its own
+    denominator is under n (a big cell can hide a tiny denominator)."""
     p = f"{prefix}." if prefix else ""
     if m.ratio:
         e = f"CAST({p}__{name}_num AS DOUBLE) / NULLIF({p}__{name}_den, 0)"
+        if suppress is not None:
+            e = (
+                f"CASE WHEN {p}__cell_n < {suppress} "
+                f"OR {p}__{name}_den < {suppress} THEN NULL ELSE {e} END"
+            )
         return f"{e} AS {alias or name}"
+    if suppress is not None:
+        return (
+            f"CASE WHEN {p}__cell_n < {suppress} THEN NULL ELSE {p}{name} END "
+            f"AS {alias or name}"
+        )
     return f"{p}{name}" + (f" AS {alias}" if alias else "")
 
 
@@ -351,11 +367,14 @@ def compile_slice(
     grain: str | None = None,
     compare: list[str] = (),
     complete_periods: bool = False,
+    suppress: int | None = None,
 ) -> Compiled:
     if not measures:
         raise SemanticsError("slice() needs at least one measure")
     if complete_periods and grain is None:
         raise SemanticsError("complete_periods needs grain= (periods to complete)")
+    if suppress is not None and (not isinstance(suppress, int) or suppress < 1):
+        raise SemanticsError("suppress(n) needs a positive integer threshold")
     for name in measures:
         if name not in model.measures:
             raise SemanticsError(
@@ -366,20 +385,21 @@ def compile_slice(
 
     time_op, ctx_attrs, applied, ignored = split_context(model, ctx)
     lines, group_aliases, has_ratio = _inner_lines(
-        model, measures, by, ctx_attrs, time_op, grain
+        model, measures, by, ctx_attrs, time_op, grain, cell_n=suppress is not None
     )
 
     if compare:
         return _assemble_compare(
             model, measures, by, ctx_attrs, time_op, grain, compare,
-            lines, group_aliases, applied, ignored, complete_periods,
+            lines, group_aliases, applied, ignored, complete_periods, suppress,
         )
 
-    if has_ratio or complete_periods:
-        # division/completeness live in an outer level; __num/__den carried
-        # beneath, never re-aggregated
+    if has_ratio or complete_periods or suppress is not None:
+        # division/completeness/suppression live in an outer level;
+        # __num/__den/__cell_n carried beneath, never re-aggregated or leaked
         outer = list(group_aliases) + [
-            _sel("", name, model.measures[name]) for name in measures
+            _sel("", name, model.measures[name], suppress=suppress)
+            for name in measures
         ]
         lines = ["SELECT " + ",\n       ".join(outer), "FROM (", _indent(lines), ")"]
         if complete_periods:
@@ -389,7 +409,8 @@ def compile_slice(
     return Compiled(sql="\n".join(lines), applied=applied, ignored=ignored)
 
 
-def _fytd_lines(model, measures, ctx_attrs, time_op, grain, group_aliases):
+def _fytd_lines(model, measures, ctx_attrs, time_op, grain, group_aliases,
+                cell_n=False):
     """Fiscal year-to-date, recomputed from base rows per output period —
     never a window-sum of period aggregates, so distinct counts and every
     other aggregate stay correct-from-base. Snapshot models never reach
@@ -404,6 +425,8 @@ def _fytd_lines(model, measures, ctx_attrs, time_op, grain, group_aliases):
             sel.append(f"{m.ratio[1]} AS __{name}_den")
         else:
             sel.append(f"{_measure_sql(m)} AS {name}")
+    if cell_n:
+        sel.append("count(*) AS __cell_n")
 
     predicates: list[str] = []
     joined: set[str] = set()
@@ -443,6 +466,7 @@ def _fytd_lines(model, measures, ctx_attrs, time_op, grain, group_aliases):
 def _assemble_compare(
     model, measures, by, ctx_attrs, time_op, grain, compare,
     out_lines, group_aliases, applied, ignored, complete_periods=False,
+    suppress=None,
 ) -> Compiled:
     """Comparisons are shifted CTEs self-joined back — never lag, so gap
     periods stay NULL instead of slipping. Each CTE carries its own window
@@ -456,7 +480,10 @@ def _assemble_compare(
     for cmp in compare:
         name = f"__cmp_{cmp}"
         if cmp == "fytd":
-            cte_lines = _fytd_lines(model, measures, ctx_attrs, time_op, grain, group_aliases)
+            cte_lines = _fytd_lines(
+                model, measures, ctx_attrs, time_op, grain, group_aliases,
+                cell_n=suppress is not None,
+            )
             scan_lo[cmp] = (
                 fy_start(time_op.lo, model.fiscal_year_start)
                 if isinstance(time_op, Between) else None
@@ -466,7 +493,10 @@ def _assemble_compare(
         else:
             months, days = _compare_offset(cmp, grain)
             shifted = _shift_op(time_op, months, days)
-            cte_lines, _, _ = _inner_lines(model, measures, by, ctx_attrs, shifted, grain)
+            cte_lines, _, _ = _inner_lines(
+                model, measures, by, ctx_attrs, shifted, grain,
+                cell_n=suppress is not None,
+            )
             scan_lo[cmp] = shifted.lo if isinstance(shifted, Between) else None
             shift = f"INTERVAL {months} MONTH" if months else f"INTERVAL {days} DAY"
             conds = [f"{name}.period = b.period - {shift}"]
@@ -482,9 +512,12 @@ def _assemble_compare(
     proj = [f"b.{g}" for g in group_aliases]
     for mname in measures:
         m = model.measures[mname]
-        proj.append(_sel("b", mname, m))
+        proj.append(_sel("b", mname, m, suppress=suppress))
         for cmp in compare:
-            proj.append(_sel(f"__cmp_{cmp}", mname, m, alias=f"{mname}_{cmp}"))
+            proj.append(
+                _sel(f"__cmp_{cmp}", mname, m, alias=f"{mname}_{cmp}",
+                     suppress=suppress)
+            )
 
     with_block = ", ".join(f"{n} AS (\n{_indent(ls)}\n)" for n, ls in ctes)
     tail = []
