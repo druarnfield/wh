@@ -114,6 +114,38 @@ def test_drill_consistency_region_totals_equal_district_sums(con, defs):
         assert regions.get((region,), {"removals": 0})["removals"] == district_sum
 
 
+def make_ts_model(con, make_defs, design_yaml):
+    """The waitlist with a TIMESTAMP time column (snapshots at 09:00)."""
+    con.execute(
+        "CREATE TABLE IF NOT EXISTS main.waitlist_ts AS "
+        "SELECT snapshot_date + INTERVAL 9 HOUR AS snapshot_ts, "
+        "* EXCLUDE (snapshot_date) FROM main.waitlist"
+    )
+    yaml = design_yaml["waitlist"].replace("main.waitlist", "main.waitlist_ts").replace(
+        "column: snapshot_date", "column: snapshot_ts"
+    )
+    return make_defs(design_yaml["dims"], yaml)["waitlist"]
+
+
+def test_timestamp_time_column_keeps_the_whole_end_day(con, make_defs, design_yaml):
+    """A date-bounded window must not cut the end day at midnight — on a
+    snapshot model that would silently move the as-at back a whole week."""
+    m = make_ts_model(con, make_defs, design_yaml)
+    ctx = context(time=("2026-06-01", "2026-06-26"))
+    rows = run(con, compile_slice(m, ["patients_waiting"], ctx=ctx))
+    assert rows[0]["patients_waiting"] == 4      # as-at 06-26 09:00, not 06-19
+
+
+def test_relative_time_includes_its_own_timestamp_anchor(con, make_defs, design_yaml):
+    from wh.metrics.context_ops import last
+    from wh.metrics.result import Slice
+
+    m = make_ts_model(con, make_defs, design_yaml)
+    s = Slice(m, ["patients_waiting"], ctx=context(time=last(1, "month")), con=lambda: con)
+    t = s.frame(backend="pyarrow")
+    assert t.column("patients_waiting").to_pylist() == [4]   # 07-10 09:00 snapshot: U1,U2,U5,U6
+
+
 def test_ratio_at_unequal_group_sizes(con, defs):
     """The avg-of-ratios trap: overall != mean of group ratios."""
     ctx = context(time=("2026-06-26", "2026-06-26"))     # one snapshot: U1,U2,U3,U5

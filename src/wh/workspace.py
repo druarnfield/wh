@@ -37,7 +37,7 @@ class Workspace:
         self.config = config
         self._con: duckdb.DuckDBPyConnection | None = None
         self._metrics_cache: tuple | None = None    # (yaml mtimes key, models)
-        self._metrics_checked: tuple | None = None  # (con, {model: warnings})
+        self._metrics_checked: tuple | None = None  # (con, defs key, {model: warnings})
 
     @classmethod
     def load(cls, path: str | Path | None = None) -> "Workspace":
@@ -238,13 +238,20 @@ class Workspace:
         return self.model(model_name).slice(**kwargs)
 
     def _bind_warnings(self, model) -> list:
-        """Bind-check cache, self-keying on connection identity."""
+        """Bind-check cache, self-keying on connection identity AND the loaded
+        definitions (YAML mtimes) — an mtime reload hands out new Models,
+        which must be re-checked, not trusted under a stale name key."""
         from .metrics.checks import bind_checks
 
         con = self.con
-        if self._metrics_checked is None or self._metrics_checked[0] is not con:
-            self._metrics_checked = (con, {})
-        cache = self._metrics_checked[1]
+        defs_key = self._metrics_cache[0] if self._metrics_cache else None
+        if (
+            self._metrics_checked is None
+            or self._metrics_checked[0] is not con
+            or self._metrics_checked[1] != defs_key
+        ):
+            self._metrics_checked = (con, defs_key, {})
+        cache = self._metrics_checked[2]
         if model.name not in cache:
             cache[model.name] = bind_checks(con, model)
         return cache[model.name]

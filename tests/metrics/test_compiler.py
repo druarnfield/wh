@@ -80,14 +80,15 @@ def test_local_dim_needs_no_join(con, make_defs, design_yaml):
     """)
 
 
-def test_time_context_is_a_between_on_the_time_column(con, defs):
+def test_time_context_is_day_inclusive_on_both_ends(con, defs):
     c = compile_slice(
         defs["removals"], ["removals"], ctx=context(time=("2025-07-01", "2026-06-30"))
     )
     assert_sql_equiv(con, c.sql, """
         SELECT count(*) FILTER (WHERE removal_reason <> 'ADMIN') AS removals
         FROM main.waitlist_removals AS fact
-        WHERE fact.removal_date BETWEEN DATE '2025-07-01' AND DATE '2026-06-30'
+        WHERE fact.removal_date >= DATE '2025-07-01'
+          AND fact.removal_date < DATE '2026-06-30' + INTERVAL 1 DAY
         GROUP BY ALL
     """)
 
@@ -146,12 +147,14 @@ def test_snapshot_asat_join_shape(con, defs):
             SELECT CAST(date_trunc('month', snapshot_date) AS DATE) AS __period,
                    max(snapshot_date) AS __as_at
             FROM main.waitlist
-            WHERE snapshot_date BETWEEN DATE '2026-06-01' AND DATE '2026-06-30'
+            WHERE snapshot_date >= DATE '2026-06-01'
+              AND snapshot_date < DATE '2026-06-30' + INTERVAL 1 DAY
             GROUP BY 1
         ) AS __asat
           ON CAST(date_trunc('month', fact.snapshot_date) AS DATE) = __asat.__period
          AND fact.snapshot_date = __asat.__as_at
-        WHERE fact.snapshot_date BETWEEN DATE '2026-06-01' AND DATE '2026-06-30'
+        WHERE fact.snapshot_date >= DATE '2026-06-01'
+          AND fact.snapshot_date < DATE '2026-06-30' + INTERVAL 1 DAY
         GROUP BY ALL
         ORDER BY period
     """)

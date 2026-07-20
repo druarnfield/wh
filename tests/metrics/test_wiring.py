@@ -62,6 +62,24 @@ def test_yaml_mtime_bump_reloads_definitions(metric_project):
     ws.close()
 
 
+def test_yaml_reload_reruns_bind_checks(metric_project):
+    """A reloaded definition is a NEW model — the bind-check cache must not
+    trust it under a stale name key (it would skip validation entirely)."""
+    ws = Workspace.load(metric_project / "wh.yaml")
+    ws.model("removals").slice(measures=["removals"])         # binds clean
+
+    path = metric_project / "semantics" / "removals.yml"
+    path.write_text(REMOVALS_YAML.replace(
+        "removal_reason <> 'ADMIN'", "facility.region = 'North'"
+    ))
+    st = path.stat()
+    os.utime(path, (st.st_atime, st.st_mtime + 5))
+
+    with pytest.raises(SemanticsError, match="fact columns"):
+        ws.model("removals").slice(measures=["removals"])
+    ws.close()
+
+
 def test_module_verbs_exist():
     assert callable(wh.model) and callable(wh.slice) and callable(wh.context)
     assert callable(wh.not_) and callable(wh.last) and callable(wh.all)

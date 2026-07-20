@@ -10,7 +10,7 @@ Dialect is DuckDB, deliberately: GROUP BY ALL, FILTER.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 
 from ..errors import SemanticsError
 from .context_ops import All, Between, Context, Eq, In, Not, EMPTY
@@ -30,9 +30,15 @@ def _lit(v) -> str:
         return "TRUE" if v else "FALSE"
     if isinstance(v, (int, float)):
         return repr(v)
+    if isinstance(v, datetime):        # BEFORE date — datetime is a date subclass
+        return f"TIMESTAMP '{v.isoformat(sep=' ')}'"
     if isinstance(v, date):
         return f"DATE '{v.isoformat()}'"
-    return "'" + str(v).replace("'", "''") + "'"
+    if not isinstance(v, str):
+        raise SemanticsError(
+            f"context values must be scalars or dates — got {type(v).__name__} ({v!r})"
+        )
+    return "'" + v.replace("'", "''") + "'"
 
 
 def _predicate(lhs: str, op) -> str | None:
@@ -47,6 +53,21 @@ def _predicate(lhs: str, op) -> str | None:
     if isinstance(op, Between):
         return f"{lhs} BETWEEN {_lit(op.lo)} AND {_lit(op.hi)}"
     raise SemanticsError(f"cannot compile context op {type(op).__name__}")
+
+
+def _time_predicate(lhs: str, op) -> str | None:
+    """Time ranges are day-inclusive on both ends. Plain-date bounds compile
+    as `>= lo AND < hi + 1 day` so a TIMESTAMP time column keeps the whole
+    end day (BETWEEN ... DATE 'hi' would cut at midnight and, on snapshot
+    models, silently move the as-at moment). Datetime bounds are exact."""
+    if not isinstance(op, Between):
+        return _predicate(lhs, op)
+    hi = (
+        f"{lhs} <= {_lit(op.hi)}"
+        if isinstance(op.hi, datetime)
+        else f"{lhs} < {_lit(op.hi)} + INTERVAL 1 DAY"
+    )
+    return f"{lhs} >= {_lit(op.lo)} AND {hi}"
 
 
 def _declared_surface(model: Model) -> str:
@@ -146,7 +167,7 @@ def _asat_join(model: Model, grain: str | None, time_op) -> list[str]:
     all groups. Time-context predicates only in here — an attribute filter
     must never move the moment a measure is evaluated at."""
     tc = model.time_column
-    time_pred = _predicate(tc, time_op) if time_op is not None else None
+    time_pred = _time_predicate(tc, time_op) if time_op is not None else None
     where = f" WHERE {time_pred}" if time_pred else ""
     if grain is None:
         return [
@@ -208,7 +229,7 @@ def compile_slice(
 
     predicates: list[str] = []
     if time_op is not None:
-        p = _predicate(f"fact.{model.time_column}", time_op)
+        p = _time_predicate(f"fact.{model.time_column}", time_op)
         if p:
             predicates.append(p)
     for _key, lhs, op in ctx_attrs:
