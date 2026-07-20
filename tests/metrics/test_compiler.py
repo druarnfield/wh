@@ -133,6 +133,42 @@ def test_no_wrapper_without_ratio_measures(defs):
     assert c.sql.count("SELECT") == 1
 
 
+def test_snapshot_asat_join_shape(con, defs):
+    c = compile_slice(
+        defs["waitlist"], ["patients_waiting"], grain="month",
+        ctx=context(time=("2026-06-01", "2026-06-30")),
+    )
+    assert_sql_equiv(con, c.sql, """
+        SELECT CAST(date_trunc('month', fact.snapshot_date) AS DATE) AS period,
+               count(DISTINCT ur) AS patients_waiting
+        FROM main.waitlist AS fact
+        JOIN (
+            SELECT CAST(date_trunc('month', snapshot_date) AS DATE) AS __period,
+                   max(snapshot_date) AS __as_at
+            FROM main.waitlist
+            WHERE snapshot_date BETWEEN DATE '2026-06-01' AND DATE '2026-06-30'
+            GROUP BY 1
+        ) AS __asat
+          ON CAST(date_trunc('month', fact.snapshot_date) AS DATE) = __asat.__period
+         AND fact.snapshot_date = __asat.__as_at
+        WHERE fact.snapshot_date BETWEEN DATE '2026-06-01' AND DATE '2026-06-30'
+        GROUP BY ALL
+        ORDER BY period
+    """)
+
+
+def test_snapshot_asat_without_grain_is_one_global_moment(con, defs):
+    c = compile_slice(defs["waitlist"], ["patients_waiting"])
+    assert_sql_equiv(con, c.sql, """
+        SELECT count(DISTINCT ur) AS patients_waiting
+        FROM main.waitlist AS fact
+        JOIN (
+            SELECT max(snapshot_date) AS __as_at FROM main.waitlist
+        ) AS __asat ON fact.snapshot_date = __asat.__as_at
+        GROUP BY ALL
+    """)
+
+
 def test_unknown_measure_names_available(defs):
     with pytest.raises(SemanticsError, match="removals"):
         compile_slice(defs["removals"], ["nope"])

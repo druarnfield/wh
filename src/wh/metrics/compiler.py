@@ -141,6 +141,27 @@ def _measure_sql(m) -> str:
     return body
 
 
+def _asat_join(model: Model, grain: str | None, time_op) -> list[str]:
+    """Global last-snapshot row selection: one moment per period, applied to
+    all groups. Time-context predicates only in here — an attribute filter
+    must never move the moment a measure is evaluated at."""
+    tc = model.time_column
+    time_pred = _predicate(tc, time_op) if time_op is not None else None
+    where = f" WHERE {time_pred}" if time_pred else ""
+    if grain is None:
+        return [
+            f"JOIN (SELECT max({tc}) AS __as_at FROM {model.fact}{where}) AS __asat",
+            f"  ON fact.{tc} = __asat.__as_at",
+        ]
+    g_bare = grain_expr(grain, tc, model.fiscal_year_start)
+    g_fact = grain_expr(grain, f"fact.{tc}", model.fiscal_year_start)
+    return [
+        f"JOIN (SELECT {g_bare} AS __period, max({tc}) AS __as_at",
+        f"      FROM {model.fact}{where} GROUP BY 1) AS __asat",
+        f"  ON {g_fact} = __asat.__period AND fact.{tc} = __asat.__as_at",
+    ]
+
+
 def compile_slice(
     model: Model,
     measures: list[str],
@@ -198,6 +219,8 @@ def compile_slice(
             joined.add(lhs.split(".", 1)[0])
 
     lines = ["SELECT " + ",\n       ".join(select), f"FROM {model.fact} AS fact"]
+    if model.snapshot:
+        lines += _asat_join(model, grain, time_op)
     for dname in [d for d in model.dims if d in joined]:   # declaration order
         dim = model.dims[dname].shared
         lines.append(

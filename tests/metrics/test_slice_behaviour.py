@@ -17,6 +17,46 @@ def by_key(rows, *keys):
     return {tuple(r[k] for k in keys): r for r in rows}
 
 
+def test_stock_rollup_is_last_snapshot_not_sum(con, defs):
+    june = context(time=("2026-06-01", "2026-06-30"))
+    rows = run(con, compile_slice(
+        defs["waitlist"], ["patients_waiting"], grain="month", ctx=june
+    ))
+    assert rows == [{"period": rows[0]["period"], "patients_waiting": 4}]  # not 17
+
+
+def test_median_is_at_end_of_month_never_over_mixed_rows(con, defs):
+    june = context(time=("2026-06-01", "2026-06-30"))
+    rows = run(con, compile_slice(defs["waitlist"], ["median_wait"], ctx=june))
+    assert rows[0]["median_wait"] == 96.0        # median(121, 71, 421, 12)
+
+
+def test_monthly_periods_each_get_their_own_asat(con, defs):
+    rows = run(con, compile_slice(defs["waitlist"], ["patients_waiting"], grain="month"))
+    assert [r["patients_waiting"] for r in rows] == [4, 4]   # June@06-26, July@07-10
+
+
+def test_lagging_clinic_reads_as_absent_at_the_global_moment(con, defs):
+    """C3's June feed stops at 06-19; the global June as-at is 06-26."""
+    june = context(time=("2026-06-01", "2026-06-30"))
+    per_region = by_key(
+        run(con, compile_slice(
+            defs["waitlist"], ["patients_waiting"], by=["facility.region"], ctx=june
+        )),
+        "facility.region",
+    )
+    assert per_region[("North",)]["patients_waiting"] == 3   # U1,U2,U3
+    assert per_region[("South",)]["patients_waiting"] == 1   # U5 only; C3/U4 absent
+
+
+def test_attribute_filter_shares_the_unfiltered_moment(con, defs):
+    """Lane separation on the evaluation moment: filtering to the lagging
+    region must NOT slide the as-at back to a snapshot where C3 was present."""
+    june_south = context(time=("2026-06-01", "2026-06-30"), facility__region="South")
+    rows = run(con, compile_slice(defs["waitlist"], ["patients_waiting"], ctx=june_south))
+    assert rows[0]["patients_waiting"] == 1      # not 2 (U4+U5 at 06-19)
+
+
 def test_ratio_at_unequal_group_sizes(con, defs):
     """The avg-of-ratios trap: overall != mean of group ratios."""
     ctx = context(time=("2026-06-26", "2026-06-26"))     # one snapshot: U1,U2,U3,U5
