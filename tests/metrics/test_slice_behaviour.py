@@ -3,6 +3,8 @@
 The seeded mirror is in conftest.con — June 2026 weekly snapshots with a
 lagging clinic (C3 absent from the June-final 06-26 snapshot)."""
 
+import pytest
+
 from wh.metrics.compiler import compile_slice
 from wh.metrics.context_ops import context
 
@@ -55,6 +57,61 @@ def test_attribute_filter_shares_the_unfiltered_moment(con, defs):
     june_south = context(time=("2026-06-01", "2026-06-30"), facility__region="South")
     rows = run(con, compile_slice(defs["waitlist"], ["patients_waiting"], ctx=june_south))
     assert rows[0]["patients_waiting"] == 1      # not 2 (U4+U5 at 06-19)
+
+
+LANE_CASES = [
+    (context(), ""),
+    (context(facility__region="North"), "WHERE facility.region = 'North'"),
+    (context(doctor__specialty=["ENT"]), "WHERE doctor.specialty IN ('ENT')"),
+    (
+        context(time=("2026-06-01", "2026-06-30")),
+        "WHERE fact.removal_date BETWEEN DATE '2026-06-01' AND DATE '2026-06-30'",
+    ),
+    (
+        context(
+            facility__region="North",
+            doctor__specialty=["ENT", "Ophthal"],
+            time=("2026-06-01", "2026-07-31"),
+        ),
+        "WHERE fact.removal_date BETWEEN DATE '2026-06-01' AND DATE '2026-07-31'"
+        " AND facility.region = 'North'"
+        " AND doctor.specialty IN ('ENT', 'Ophthal')",
+    ),
+]
+
+
+@pytest.mark.parametrize("ctx,hand_where", LANE_CASES)
+def test_lane_isolation_property(con, defs, ctx, hand_where):
+    """Layer vs hand-written over the same in-scope rows: no context can
+    change the intrinsic predicate."""
+    layer = run(con, compile_slice(defs["removals"], ["removals"], ctx=ctx))
+    (hand,) = con.execute(f"""
+        SELECT count(*) FILTER (WHERE removal_reason <> 'ADMIN')
+        FROM main.waitlist_removals AS fact
+        LEFT JOIN main.clinic_dim AS facility
+               ON fact.clinic_code = facility.clinic_code
+        LEFT JOIN main.doctor_dim AS doctor ON fact.doctor_id = doctor.doctor_id
+        {hand_where}
+    """).fetchone()
+    assert layer[0]["removals"] == hand
+
+
+def test_drill_consistency_region_totals_equal_district_sums(con, defs):
+    june = context(time=("2026-06-01", "2026-06-30"))
+    regions = by_key(
+        run(con, compile_slice(defs["removals"], ["removals"], by=["facility.region"], ctx=june)),
+        "facility.region",
+    )
+    districts = run(
+        con, compile_slice(defs["removals"], ["removals"], by=["facility.district"], ctx=june)
+    )
+    to_region = {"Coastal": "North", "Inland": "North", "Seaside": "South", "Range": "South"}
+    for region in ("North", "South"):
+        district_sum = sum(
+            r["removals"] for r in districts
+            if to_region.get(r["facility.district"]) == region
+        )
+        assert regions.get((region,), {"removals": 0})["removals"] == district_sum
 
 
 def test_ratio_at_unequal_group_sizes(con, defs):
