@@ -27,10 +27,12 @@ class Slice:
         compare: list[str] = (),
         complete_periods: bool = False,
         suppress: int | None = None,
+        warnings: list = (),         # bind-check warnings, for provenance
     ):
         self._model = model
         self._con = con
         self._preferred_backend = preferred_backend
+        self._warnings = list(warnings)
         if not ctx.is_resolved:
             ctx = ctx.resolve(anchor=self._anchor())
         self._args = dict(
@@ -87,7 +89,17 @@ class Slice:
         return Slice(
             self._model, con=self._con,
             preferred_backend=self._preferred_backend,
+            warnings=self._warnings,
             **{**self._args, "suppress": n},
+        )
+
+    def provenance(self):
+        """What was computed, under what definition version, filtered how,
+        on data from when."""
+        from .provenance import Provenance
+
+        return Provenance(
+            self._model, self._compiled, self._args, self._con, self._warnings
         )
 
     def view(self, name: str) -> None:
@@ -125,13 +137,14 @@ class BoundModel:
         compare: list[str] = (),
         complete_periods: bool = False,
     ) -> Slice:
-        self._ws._bind_warnings(self._model)     # validate before first query
+        warnings = self._ws._bind_warnings(self._model)   # validate before first query
         return Slice(
             self._model, measures, by=by, ctx=context, grain=grain,
             strict_context=strict_context, compare=compare,
             complete_periods=complete_periods,
             con=lambda: self._ws.con,
             preferred_backend=self._ws.config.frames,
+            warnings=warnings,
         )
 
     def __repr__(self):

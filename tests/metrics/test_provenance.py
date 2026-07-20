@@ -63,6 +63,119 @@ def test_time_agg_is_hash_relevant_but_description_is_not(con, make_defs, design
     assert h == measure_hash(con, desc, desc.measures["removals"])
 
 
+# --- Task 3: the Provenance object ---
+
+
+from wh.metrics.context_ops import all_          # noqa: E402
+from wh.metrics.result import Slice              # noqa: E402
+
+
+def prov(defs, con, model="removals", measures=("removals",), **kw):
+    return Slice(defs[model], list(measures), con=lambda: con, **kw).provenance()
+
+
+def test_provenance_fields(con, defs):
+    p = prov(
+        defs, con, by=["facility.region"], grain="month", compare=["prior"],
+        ctx=context(
+            time=("2026-06-01", "2026-07-31"),
+            facility__region="North",
+            urgency="Cat 1",                     # removals has no urgency: ignored
+        ),
+    )
+    name, text, h = p.measures[0]
+    assert name == "removals"
+    assert "FILTER (WHERE removal_reason <> 'ADMIN')" in text
+    assert re.fullmatch(r"[0-9a-f]{64}", h)
+    assert p.context["applied"]["facility__region"] == {"eq": "North"}
+    assert p.context["ignored"] == ["urgency"]
+    assert p.shape["grain"] == "month" and p.shape["compare"] == ["prior"]
+    assert "main.waitlist_removals" in p.data["tables"]
+    assert "removal_reason" in p.data["tables"]["main.waitlist_removals"]["columns"]
+    assert p.data["duckdb_version"]
+    assert re.fullmatch(r"[0-9a-f]{64}", p.data["model_hash"])
+    assert "SELECT" in p.sql
+
+
+def test_empty_selection_is_its_own_bucket(con, defs):
+    p = prov(defs, con, ctx=context(facility__region=all_()))
+    assert p.context["unfiltered"] == ["facility__region"]
+    assert "facility__region" not in p.context["applied"]
+    assert "empty selection" in p.render()
+
+
+def test_strictness_weakened_confesses(con, make_defs, design_yaml):
+    strict_yaml = design_yaml["removals"].replace(
+        "removals:\n  fact:", "removals:\n  strict_context: true\n  fact:"
+    )
+    defs = make_defs(design_yaml["dims"], strict_yaml)
+    p = prov(defs, con, ctx=context(urgency="Cat 1"), strict_context=False)
+    assert p.shape["strictness_weakened"] is True
+    assert "strictness weakened" in p.render()
+
+
+def test_non_additive_measures_named(con, defs):
+    p = prov(defs, con, model="waitlist", measures=["patients_waiting", "long_waiters"])
+    assert p.shape["non_additive"] == ["patients_waiting"]
+    assert "patients_waiting" in p.render() and "re-sum" in p.render()
+
+
+def test_scan_coverage_reports_the_data_start(con, defs):
+    p = prov(
+        defs, con, grain="month", compare=["yoy"],
+        ctx=context(time=("2026-06-01", "2026-07-31")),
+    )
+    scan = p.data["scan"]["yoy"]
+    assert scan["lo"] == "2025-06-01"
+    assert "begins 2026-06-10" in scan["coverage"]        # min removal_date
+    assert "partially" in scan["coverage"]
+
+
+def test_truncation_disclosed(con, defs):
+    p = prov(
+        defs, con, model="waitlist", measures=["patients_waiting"], grain="month",
+        ctx=context(time=("2026-06-01", "2026-07-05")),
+    )
+    assert p.data["truncation"] is not None and "2026-07-05" in p.data["truncation"]
+    assert "truncated" in p.render()
+
+
+def test_snapshot_asat_moments_reported(con, defs):
+    p = prov(
+        defs, con, model="waitlist", measures=["patients_waiting"], grain="month",
+        ctx=context(time=("2026-06-01", "2026-06-30")),
+    )
+    assert p.data["as_at"]["base"] == [["2026-06-01", "2026-06-26"]]
+    assert "as-at" in p.render()
+
+
+def test_refresh_timestamps_from_mirror_meta_or_honest_absence(con, defs):
+    p = prov(defs, con)
+    assert p.data["tables"]["main.waitlist_removals"]["refreshed_at"] is None
+    con.execute("""
+        CREATE SCHEMA _mirror;
+        CREATE TABLE _mirror.meta (schema_name VARCHAR, table_name VARCHAR,
+            source_sql VARCHAR, mode VARCHAR, row_count BIGINT,
+            extracted_at TIMESTAMP, duration_s DOUBLE, spec_hash VARCHAR);
+        INSERT INTO _mirror.meta VALUES ('main', 'waitlist_removals', '', 'native',
+            6, TIMESTAMP '2026-07-19 02:00:00', 1.0, 'x');
+    """)
+    p = prov(defs, con)
+    assert p.data["tables"]["main.waitlist_removals"]["refreshed_at"].startswith(
+        "2026-07-19"
+    )
+
+
+def test_to_dict_is_json_serialisable(con, defs):
+    p = prov(
+        defs, con, model="waitlist", measures=["patients_waiting"], grain="month",
+        compare=["prior"], ctx=context(time=("2026-06-01", "2026-07-31")),
+    )
+    d = json.loads(json.dumps(p.to_dict()))
+    assert d["shape"]["compare"] == ["prior"]
+    assert d["measures"][0]["name"] == "patients_waiting"
+
+
 # --- Task 2: as-at + truncation plumbing ---
 
 
