@@ -28,26 +28,36 @@ def canary_ctx():
 
 
 CASES = [
-    ("removals", ["removals"], [], None),                       # intrinsic where
-    ("removals", ["removals"], ["facility.region"], "month"),
-    ("waitlist", ["patients_waiting", "long_waiters"], [], None),
-    ("waitlist", ["long_waiters", "median_wait"], ["doctor.specialty"], "fy"),
-    ("waitlist", ["pct_over_target"], ["facility.district"], "month"),  # ratio
+    ("removals", ["removals"], [], None, ()),                   # intrinsic where
+    ("removals", ["removals"], ["facility.region"], "month", ()),
+    ("waitlist", ["patients_waiting", "long_waiters"], [], None, ()),
+    ("waitlist", ["long_waiters", "median_wait"], ["doctor.specialty"], "fy", ()),
+    ("waitlist", ["pct_over_target"], ["facility.district"], "month", ()),  # ratio
+    ("removals", ["removals"], ["facility.region"], "month", ("prior", "yoy")),
+    ("waitlist", ["patients_waiting"], ["facility.region"], "month", ("prior",)),
 ]
 
 
-@pytest.mark.parametrize("model,measures,by,grain", CASES)
-def test_attribute_canaries_only_in_the_extrinsic_lane(con, defs, model, measures, by, grain):
-    c = compile_slice(defs[model], measures, by=by, ctx=canary_ctx(), grain=grain)
+@pytest.mark.parametrize("model,measures,by,grain,compare", CASES)
+def test_attribute_canaries_only_in_the_extrinsic_lane(
+    con, defs, model, measures, by, grain, compare
+):
+    c = compile_slice(
+        defs[model], measures, by=by, ctx=canary_ctx(), grain=grain, compare=compare
+    )
     in_where, in_asat, total = canary_counts(con, c.sql, ATTR_CANARY)
     assert total > 0, "canary context was not compiled at all"
     assert in_asat == 0, "attribute predicate leaked into the as-at subquery"
     assert in_where == total, "context value appeared outside the outer WHERE"
 
 
-@pytest.mark.parametrize("model,measures,by,grain", CASES)
-def test_time_canaries_only_in_where_lanes(con, defs, model, measures, by, grain):
-    c = compile_slice(defs[model], measures, by=by, ctx=canary_ctx(), grain=grain)
+@pytest.mark.parametrize("model,measures,by,grain,compare", CASES)
+def test_time_canaries_only_in_where_lanes(
+    con, defs, model, measures, by, grain, compare
+):
+    c = compile_slice(
+        defs[model], measures, by=by, ctx=canary_ctx(), grain=grain, compare=compare
+    )
     in_where, in_asat, total = canary_counts(con, c.sql, TIME_CANARY)
     assert total > 0
     assert in_where + in_asat == total, "time value appeared outside WHERE lanes"

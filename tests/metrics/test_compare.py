@@ -1,0 +1,154 @@
+"""compare= — shifted-CTE self-joins, never lag; own as-at per period."""
+
+from datetime import date
+
+import pytest
+
+from wh.errors import SemanticsError
+from wh.metrics.compiler import compile_slice
+from wh.metrics.context_ops import context
+from wh.metrics.timegrain import fy_start
+
+from treecheck import assert_sql_equiv
+
+
+def run(con, compiled):
+    rows = con.execute(compiled.sql).fetchall()
+    cols = [d[0] for d in con.description]
+    return [dict(zip(cols, r)) for r in rows]
+
+
+# --- Task 1: validity + helpers ---
+
+
+def test_fy_start():
+    assert fy_start(date(2026, 3, 10), 7) == date(2025, 7, 1)
+    assert fy_start(date(2026, 8, 1), 7) == date(2026, 7, 1)
+    assert fy_start(date(2026, 3, 10), 1) == date(2026, 1, 1)
+
+
+def test_compare_needs_grain(defs):
+    with pytest.raises(SemanticsError, match="grain"):
+        compile_slice(defs["removals"], ["removals"], compare=["yoy"])
+
+
+def test_unknown_compare_lists_the_vocabulary(defs):
+    with pytest.raises(SemanticsError, match="fytd"):
+        compile_slice(defs["removals"], ["removals"], grain="month", compare=["wow"])
+
+
+def test_fytd_on_a_stock_measure_errors_naming_the_fix(defs):
+    with pytest.raises(SemanticsError, match="event-grain"):
+        compile_slice(
+            defs["waitlist"], ["patients_waiting"], grain="month", compare=["fytd"]
+        )
+
+
+def test_time_agg_none_refuses_any_compare(defs):
+    with pytest.raises(SemanticsError, match="median_wait"):
+        compile_slice(defs["waitlist"], ["median_wait"], grain="month", compare=["prior"])
+
+
+def test_yoy_at_week_grain_errors(defs):
+    with pytest.raises(SemanticsError, match="week"):
+        compile_slice(defs["removals"], ["removals"], grain="week", compare=["yoy"])
+
+
+def test_comparison_suffix_collision_errors(make_defs, design_yaml):
+    yaml = design_yaml["removals"].replace(
+        "  measures:\n",
+        "  measures:\n    removals_prior:\n      expr: count(*)\n"
+        "      description: unlucky name\n",
+    )
+    defs = make_defs(design_yaml["dims"], yaml)
+    with pytest.raises(SemanticsError, match="removals_prior"):
+        compile_slice(defs["removals"], ["removals"], grain="month", compare=["prior"])
+
+
+# --- Task 2: prior/yoy compilation ---
+
+
+def test_compare_cte_shape_and_scan_widening(con, defs):
+    c = compile_slice(
+        defs["removals"], ["removals"], by=["facility.region"], grain="month",
+        ctx=context(time=("2026-06-01", "2026-07-31")), compare=["yoy"],
+    )
+    assert c.scan_lo == {"yoy": date(2025, 6, 1)}
+    assert_sql_equiv(con, c.sql, """
+        WITH __out AS (
+            SELECT CAST(date_trunc('month', fact.removal_date) AS DATE) AS period,
+                   facility.region AS "facility.region",
+                   count(*) FILTER (WHERE removal_reason <> 'ADMIN') AS removals
+            FROM main.waitlist_removals AS fact
+            LEFT JOIN main.clinic_dim AS facility
+                   ON fact.clinic_code = facility.clinic_code
+            WHERE fact.removal_date >= DATE '2026-06-01'
+              AND fact.removal_date < DATE '2026-07-31' + INTERVAL 1 DAY
+            GROUP BY ALL
+        ), __cmp_yoy AS (
+            SELECT CAST(date_trunc('month', fact.removal_date) AS DATE) AS period,
+                   facility.region AS "facility.region",
+                   count(*) FILTER (WHERE removal_reason <> 'ADMIN') AS removals
+            FROM main.waitlist_removals AS fact
+            LEFT JOIN main.clinic_dim AS facility
+                   ON fact.clinic_code = facility.clinic_code
+            WHERE fact.removal_date >= DATE '2025-06-01'
+              AND fact.removal_date < DATE '2025-07-31' + INTERVAL 1 DAY
+            GROUP BY ALL
+        )
+        SELECT b.period,
+               b."facility.region",
+               b.removals,
+               __cmp_yoy.removals AS removals_yoy
+        FROM __out AS b
+        LEFT JOIN __cmp_yoy
+               ON __cmp_yoy.period = b.period - INTERVAL 12 MONTH
+              AND __cmp_yoy."facility.region" IS NOT DISTINCT FROM b."facility.region"
+        ORDER BY period
+    """)
+
+
+def test_prior_aligns_by_group_and_gaps_stay_null(con, defs):
+    """South has no June rows: its July prior must be NULL — a lag() would
+    slip North's June value into the gap."""
+    rows = run(con, compile_slice(
+        defs["removals"], ["removals"], by=["facility.region"],
+        grain="month", compare=["prior"],
+    ))
+    got = {(r["period"], r["facility.region"]): r for r in rows}
+    july = date(2026, 7, 1)
+    june = date(2026, 6, 1)
+    assert got[(july, "North")]["removals_prior"] == 2      # June North
+    assert got[(july, "South")]["removals_prior"] is None   # gap, not slipped
+    assert got[(june, "North")]["removals_prior"] is None   # off the data start
+
+
+def test_yoy_off_data_start_is_null_not_a_crash(con, defs):
+    rows = run(con, compile_slice(
+        defs["removals"], ["removals"], grain="month", compare=["yoy"],
+    ))
+    assert all(r["removals_yoy"] is None for r in rows)
+
+
+def test_ratio_measures_compare_too(con, defs):
+    rows = run(con, compile_slice(
+        defs["waitlist"], ["pct_over_target"], grain="month", compare=["prior"],
+    ))
+    got = {r["period"]: r for r in rows}
+    june = got[date(2026, 6, 1)]["pct_over_target"]
+    assert got[date(2026, 7, 1)]["pct_over_target_prior"] == june == 0.75
+
+
+# --- Task 3: snapshot comparisons carry their own as-at ---
+
+
+def test_snapshot_prior_uses_the_prior_periods_own_asat(con, defs):
+    rows = run(con, compile_slice(
+        defs["waitlist"], ["patients_waiting"], by=["facility.region"],
+        grain="month", compare=["prior"],
+    ))
+    got = {(r["period"], r["facility.region"]): r for r in rows}
+    july = date(2026, 7, 1)
+    # June evaluated at ITS as-at (06-26): North 3, South 1 (C3 lagging absent)
+    assert got[(july, "North")]["patients_waiting_prior"] == 3
+    assert got[(july, "South")]["patients_waiting_prior"] == 1

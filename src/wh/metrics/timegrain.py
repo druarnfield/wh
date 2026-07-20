@@ -7,9 +7,24 @@ Fiscal periods use the shift trick — slide dates back by (fiscal_year_start
 
 from __future__ import annotations
 
+from datetime import date
+
 from ..errors import SemanticsError
 
 GRAINS = ("day", "week", "month", "quarter", "year", "fy", "fy_quarter")
+
+# one period's width, as a SQL interval (compare shifting, completeness)
+PERIOD_INTERVAL = {
+    "day": "1 DAY", "week": "7 DAY", "month": "1 MONTH", "quarter": "3 MONTH",
+    "year": "1 YEAR", "fy": "1 YEAR", "fy_quarter": "3 MONTH",
+}
+
+
+def fy_start(d: date, fiscal_year_start: int) -> date:
+    """First day of the fiscal year containing `d` (pure-Python mirror of
+    the SQL shift trick)."""
+    y = d.year if d.month >= fiscal_year_start else d.year - 1
+    return date(y, fiscal_year_start, 1)
 
 
 def grain_expr(grain: str, column_sql: str, fiscal_year_start: int) -> str:

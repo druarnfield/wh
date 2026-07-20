@@ -10,10 +10,10 @@ Dialect is DuckDB, deliberately: GROUP BY ALL, FILTER.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 from ..errors import SemanticsError
-from .context_ops import All, Between, Context, Eq, In, Not, EMPTY
+from .context_ops import All, Between, Context, Eq, In, Not, EMPTY, _months_back
 from .loader import Model
 from .timegrain import grain_expr
 
@@ -23,6 +23,67 @@ class Compiled:
     sql: str
     applied: tuple   # context keys compiled into the outer WHERE
     ignored: tuple   # context keys skipped by the miss rule
+    scan_lo: dict | None = None   # compare -> widened window start (provenance)
+
+
+COMPARES = ("prior", "yoy", "fytd")
+
+_PRIOR_OFFSET = {   # (months, days) one grain-period back
+    "day": (0, 1), "week": (0, 7), "month": (1, 0), "quarter": (3, 0),
+    "year": (12, 0), "fy": (12, 0), "fy_quarter": (3, 0),
+}
+
+
+def _compare_offset(cmp: str, grain: str) -> tuple[int, int]:
+    return (12, 0) if cmp == "yoy" else _PRIOR_OFFSET[grain]
+
+
+def _shift_back(v, months: int, days: int):
+    if months:
+        d = _months_back(v, months)
+        v = datetime.combine(d, v.time()) if isinstance(v, datetime) else d
+    return v - timedelta(days=days) if days else v
+
+
+def _shift_op(op, months: int, days: int):
+    if not isinstance(op, Between):
+        return op
+    return Between(_shift_back(op.lo, months, days), _shift_back(op.hi, months, days))
+
+
+def _check_compare(model: Model, measures, compare, grain) -> None:
+    if not compare:
+        return
+    if grain is None:
+        raise SemanticsError("compare= needs grain= (a period axis to shift along)")
+    for cmp in compare:
+        if cmp not in COMPARES:
+            raise SemanticsError(
+                f"unknown compare '{cmp}' — valid: {', '.join(COMPARES)}"
+            )
+        if cmp == "yoy" and grain == "week":
+            raise SemanticsError(
+                "yoy at week grain misaligns week starts — use month or coarser"
+            )
+    for name in measures:
+        m = model.measures[name]
+        if m.time_agg == "none":
+            raise SemanticsError(
+                f"measure '{name}' has time_agg none — no comparisons are "
+                f"defined for it"
+            )
+        if m.time_agg in ("last", "avg") and "fytd" in compare:
+            raise SemanticsError(
+                f"fytd is cumulative; measure '{name}' is a point-in-time stock "
+                f"(time_agg {m.time_agg}) — model the flow as its own "
+                f"event-grain fact"
+            )
+        for cmp in compare:
+            if f"{name}_{cmp}" in model.measures:
+                raise SemanticsError(
+                    f"comparison column '{name}_{cmp}' collides with a declared "
+                    f"measure — rename one of them"
+                )
 
 
 def _lit(v) -> str:
@@ -194,35 +255,21 @@ def _asat_join(model: Model, grain: str | None, time_op) -> list[str]:
     ]
 
 
-def compile_slice(
-    model: Model,
-    measures: list[str],
-    by: list[str] = (),
-    ctx: Context = EMPTY,
-    grain: str | None = None,
-) -> Compiled:
-    if not measures:
-        raise SemanticsError("slice() needs at least one measure")
-    for name in measures:
-        if name not in model.measures:
-            raise SemanticsError(
-                f"model '{model.name}' has no measure '{name}' "
-                f"(available: {', '.join(model.measures)})"
-            )
-
-    time_op, ctx_attrs, applied, ignored = split_context(model, ctx)
-
+def _inner_lines(model, measures, by, ctx_attrs, time_op, grain):
+    """One aggregate query (SELECT ... GROUP BY ALL, no ORDER BY) — reused
+    per comparison CTE with a shifted time_op.
+    -> (lines, group_aliases, has_ratio)."""
     select: list[str] = []
-    outer: list[str] = []        # projection of the ratio wrapper, if needed
     joined: set[str] = set()
+    group_aliases: list[str] = []
     if grain is not None:
         expr = grain_expr(grain, f"fact.{model.time_column}", model.fiscal_year_start)
         select.append(f"{expr} AS period")
-        outer.append("period")
+        group_aliases.append("period")
     for entry in by:
         item, dim = _by_item(model, entry)
         select.append(item)
-        outer.append(item.rsplit(" AS ", 1)[1])
+        group_aliases.append(item.rsplit(" AS ", 1)[1])
         if dim:
             joined.add(dim)
     has_ratio = False
@@ -230,15 +277,10 @@ def compile_slice(
         m = model.measures[name]
         if m.ratio:
             has_ratio = True
-            num, den = m.ratio
-            select.append(f"{num} AS __{name}_num")
-            select.append(f"{den} AS __{name}_den")
-            outer.append(
-                f"CAST(__{name}_num AS DOUBLE) / NULLIF(__{name}_den, 0) AS {name}"
-            )
+            select.append(f"{m.ratio[0]} AS __{name}_num")
+            select.append(f"{m.ratio[1]} AS __{name}_den")
         else:
             select.append(f"{_measure_sql(m)} AS {name}")
-            outer.append(name)
 
     predicates: list[str] = []
     if time_op is not None:
@@ -264,10 +306,108 @@ def compile_slice(
     if predicates:
         lines.append("WHERE " + "\n  AND ".join(predicates))
     lines.append("GROUP BY ALL")
+    return lines, group_aliases, has_ratio
+
+
+def _sel(prefix: str, name: str, m, alias: str | None = None) -> str:
+    """Outer-select item for a measure column living in `prefix` (a CTE
+    alias, or '' inside the plain ratio wrapper)."""
+    p = f"{prefix}." if prefix else ""
+    if m.ratio:
+        e = f"CAST({p}__{name}_num AS DOUBLE) / NULLIF({p}__{name}_den, 0)"
+        return f"{e} AS {alias or name}"
+    return f"{p}{name}" + (f" AS {alias}" if alias else "")
+
+
+def _indent(lines: list[str]) -> str:
+    return "\n".join("    " + line for line in "\n".join(lines).splitlines())
+
+
+def compile_slice(
+    model: Model,
+    measures: list[str],
+    by: list[str] = (),
+    ctx: Context = EMPTY,
+    grain: str | None = None,
+    compare: list[str] = (),
+) -> Compiled:
+    if not measures:
+        raise SemanticsError("slice() needs at least one measure")
+    for name in measures:
+        if name not in model.measures:
+            raise SemanticsError(
+                f"model '{model.name}' has no measure '{name}' "
+                f"(available: {', '.join(model.measures)})"
+            )
+    _check_compare(model, measures, compare, grain)
+
+    time_op, ctx_attrs, applied, ignored = split_context(model, ctx)
+    lines, group_aliases, has_ratio = _inner_lines(
+        model, measures, by, ctx_attrs, time_op, grain
+    )
+
+    if compare:
+        return _assemble_compare(
+            model, measures, by, ctx_attrs, time_op, grain, compare,
+            lines, group_aliases, applied, ignored,
+        )
+
     if has_ratio:
         # division outermost, __num/__den carried beneath — never re-aggregated
-        inner = "\n".join("    " + line for line in "\n".join(lines).splitlines())
-        lines = ["SELECT " + ",\n       ".join(outer), "FROM (", inner, ")"]
+        outer = list(group_aliases) + [
+            _sel("", name, model.measures[name]) for name in measures
+        ]
+        lines = ["SELECT " + ",\n       ".join(outer), "FROM (", _indent(lines), ")"]
     if grain is not None:
         lines.append("ORDER BY period")
     return Compiled(sql="\n".join(lines), applied=applied, ignored=ignored)
+
+
+def _assemble_compare(
+    model, measures, by, ctx_attrs, time_op, grain, compare,
+    out_lines, group_aliases, applied, ignored,
+) -> Compiled:
+    """Comparisons are shifted CTEs self-joined back — never lag, so gap
+    periods stay NULL instead of slipping. Each CTE carries its own window
+    (and, on snapshot models, its own as-at)."""
+    ctes: list[tuple[str, list[str]]] = [("__out", out_lines)]
+    joins: list[str] = []
+    scan_lo: dict = {}
+    group_conds = [
+        f"IS NOT DISTINCT FROM b.{g}" for g in group_aliases if g != "period"
+    ]
+    for cmp in compare:
+        name = f"__cmp_{cmp}"
+        if cmp == "fytd":
+            raise SemanticsError("fytd is not implemented yet")   # Task 4
+        months, days = _compare_offset(cmp, grain)
+        shifted = _shift_op(time_op, months, days)
+        cte_lines, _, _ = _inner_lines(model, measures, by, ctx_attrs, shifted, grain)
+        scan_lo[cmp] = shifted.lo if isinstance(shifted, Between) else None
+        shift = f"INTERVAL {months} MONTH" if months else f"INTERVAL {days} DAY"
+        conds = [f"{name}.period = b.period - {shift}"]
+        ctes.append((name, cte_lines))
+        conds += [
+            f"{name}.{g} {cond}"
+            for g, cond in zip(
+                [g for g in group_aliases if g != "period"], group_conds
+            )
+        ]
+        joins.append(f"LEFT JOIN {name}\n       ON " + "\n      AND ".join(conds))
+
+    proj = [f"b.{g}" for g in group_aliases]
+    for mname in measures:
+        m = model.measures[mname]
+        proj.append(_sel("b", mname, m))
+        for cmp in compare:
+            proj.append(_sel(f"__cmp_{cmp}", mname, m, alias=f"{mname}_{cmp}"))
+
+    with_block = ", ".join(f"{n} AS (\n{_indent(ls)}\n)" for n, ls in ctes)
+    sql = "\n".join([
+        "WITH " + with_block,
+        "SELECT " + ",\n       ".join(proj),
+        "FROM __out AS b",
+        *joins,
+        "ORDER BY period",
+    ])
+    return Compiled(sql=sql, applied=applied, ignored=ignored, scan_lo=scan_lo)
