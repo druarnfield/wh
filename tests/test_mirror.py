@@ -1,7 +1,7 @@
 import duckdb
 import pytest
 
-from wh.mirror import build
+from wh.mirror import build, _staging_connection
 from tests.conftest import make_config, make_spec, fake_extract
 
 
@@ -66,6 +66,21 @@ def test_failure_during_db_swap_restores_live_parquet(tmp_path, monkeypatch):
     assert q(cfg, 'SELECT a FROM "main"."t1"') == [(1,)]
     assert not cfg.parquet_dir.with_name("parquet.old").exists()
     assert not (tmp_path / ".mirror_staging").exists()
+
+
+def test_staging_connection_does_not_preserve_insertion_order(tmp_path):
+    # With preserve_insertion_order on (the default), DuckDB buffers an
+    # entire streamed Arrow source in RAM before COPY/CTAS writes a row —
+    # mirroring a big table held the whole extract in memory. Mirror rows
+    # have no meaningful order, so the staging build disables it.
+    con = _staging_connection(tmp_path / "staging.duckdb")
+    try:
+        (val,) = con.execute(
+            "SELECT current_setting('preserve_insertion_order')"
+        ).fetchone()
+        assert val is False
+    finally:
+        con.close()
 
 
 def test_failed_build_leaves_live_mirror_untouched(tmp_path):

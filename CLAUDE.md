@@ -202,6 +202,15 @@ SQL Server. Excel/CSV readers for messy business files. Oracle later.
 - Landed tables are scratch BY DESIGN: `mirror()` rebuilds the .duckdb from
   config alone, so a refresh wipes anything `land()`ed. Documented in the
   land docstring + README; keep it documented if either changes.
+- DuckDB `preserve_insertion_order` (default TRUE) buffers an ENTIRE
+  streamed Arrow source in RAM before COPY/CTAS writes anything — mirror
+  held whole tables in memory (measured: peak linear in table size; false
+  → constant ~90MB). `_staging_connection()` disables it for mirror builds;
+  mirrored rows have no meaningful order. Do NOT set it on the session
+  connection — notebook users rely on stable result order, so `land()`
+  still buffers via CTAS. Native-mode mirror tables also still peak at
+  ~table size (buffer-pool caching of the new table, bounded by DuckDB's
+  memory_limit, spills to disk); parquet mode is the constant-memory lane.
 
 ## Architecture (see design doc for full detail)
 
