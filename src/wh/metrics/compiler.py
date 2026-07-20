@@ -135,12 +135,10 @@ def _by_item(model: Model, entry: str) -> tuple[str, str | None]:
 
 
 def _measure_sql(m) -> str:
-    if m.expr is not None:
-        body = m.expr
-        if m.where:
-            body = f"{body} FILTER (WHERE {m.where})"
-        return body
-    raise SemanticsError(f"measure '{m.name}' is a ratio")  # replaced in Task 9
+    body = m.expr
+    if m.where:
+        body = f"{body} FILTER (WHERE {m.where})"
+    return body
 
 
 def compile_slice(
@@ -160,17 +158,32 @@ def compile_slice(
     time_op, ctx_attrs, applied, ignored = split_context(model, ctx)
 
     select: list[str] = []
+    outer: list[str] = []        # projection of the ratio wrapper, if needed
     joined: set[str] = set()
     if grain is not None:
         expr = grain_expr(grain, f"fact.{model.time_column}", model.fiscal_year_start)
         select.append(f"{expr} AS period")
+        outer.append("period")
     for entry in by:
         item, dim = _by_item(model, entry)
         select.append(item)
+        outer.append(item.rsplit(" AS ", 1)[1])
         if dim:
             joined.add(dim)
+    has_ratio = False
     for name in measures:
-        select.append(f"{_measure_sql(model.measures[name])} AS {name}")
+        m = model.measures[name]
+        if m.ratio:
+            has_ratio = True
+            num, den = m.ratio
+            select.append(f"{num} AS __{name}_num")
+            select.append(f"{den} AS __{name}_den")
+            outer.append(
+                f"CAST(__{name}_num AS DOUBLE) / NULLIF(__{name}_den, 0) AS {name}"
+            )
+        else:
+            select.append(f"{_measure_sql(m)} AS {name}")
+            outer.append(name)
 
     predicates: list[str] = []
     if time_op is not None:
@@ -194,6 +207,10 @@ def compile_slice(
     if predicates:
         lines.append("WHERE " + "\n  AND ".join(predicates))
     lines.append("GROUP BY ALL")
+    if has_ratio:
+        # division outermost, __num/__den carried beneath — never re-aggregated
+        inner = "\n".join("    " + line for line in "\n".join(lines).splitlines())
+        lines = ["SELECT " + ",\n       ".join(outer), "FROM (", inner, ")"]
     if grain is not None:
         lines.append("ORDER BY period")
     return Compiled(sql="\n".join(lines), applied=applied, ignored=ignored)

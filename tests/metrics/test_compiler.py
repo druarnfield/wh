@@ -18,6 +18,11 @@ events:
     n:
       expr: count(*)
       description: "Events"
+    pct_urgent:
+      ratio:
+        num: count(*) FILTER (WHERE urgency_code = 'Cat 1')
+        den: count(*)
+      description: "% urgent"
 """
 
 
@@ -95,6 +100,37 @@ def test_miss_rule_applied_and_ignored(defs, make_defs, design_yaml):
     )
     assert c.applied == ("facility__region", "urgency")
     assert c.ignored == ("doctor__specialty",)     # events has no doctor dim
+
+
+def test_ratio_division_outermost_components_beneath(con, make_defs, design_yaml):
+    defs = make_defs(design_yaml["dims"], EVENTS_YAML)
+    c = compile_slice(
+        defs["events"], ["n", "pct_urgent"], by=["facility.region"], grain="month"
+    )
+    assert_sql_equiv(con, c.sql, """
+        SELECT period,
+               "facility.region",
+               n,
+               CAST(__pct_urgent_num AS DOUBLE) / NULLIF(__pct_urgent_den, 0)
+                   AS pct_urgent
+        FROM (
+            SELECT CAST(date_trunc('month', fact.event_date) AS DATE) AS period,
+                   facility.region AS "facility.region",
+                   count(*) AS n,
+                   count(*) FILTER (WHERE urgency_code = 'Cat 1') AS __pct_urgent_num,
+                   count(*) AS __pct_urgent_den
+            FROM main.events AS fact
+            LEFT JOIN main.clinic_dim AS facility
+                   ON fact.clinic_code = facility.clinic_code
+            GROUP BY ALL
+        )
+        ORDER BY period
+    """)
+
+
+def test_no_wrapper_without_ratio_measures(defs):
+    c = compile_slice(defs["removals"], ["removals"], grain="month")
+    assert c.sql.count("SELECT") == 1
 
 
 def test_unknown_measure_names_available(defs):
