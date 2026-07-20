@@ -26,6 +26,7 @@ class Compiled:
     applied: tuple   # context keys compiled into the outer WHERE
     ignored: tuple   # context keys skipped by the miss rule
     scan_lo: dict | None = None   # compare -> widened window start (provenance)
+    asat_queries: dict | None = None   # lane -> as-at subquery (snapshot models)
 
 
 COMPARES = ("prior", "yoy", "fytd")
@@ -236,23 +237,30 @@ def _measure_sql(m) -> str:
     return body
 
 
-def _asat_join(model: Model, grain: str | None, time_op) -> list[str]:
-    """Global last-snapshot row selection: one moment per period, applied to
-    all groups. Time-context predicates only in here — an attribute filter
-    must never move the moment a measure is evaluated at."""
+def _asat_subquery(model: Model, grain: str | None, time_op) -> str:
+    """The as-at moment(s): global max snapshot per period. Time-context
+    predicates only — an attribute filter must never move the moment a
+    measure is evaluated at. Also run standalone by provenance."""
     tc = model.time_column
     time_pred = _time_predicate(tc, time_op) if time_op is not None else None
     where = f" WHERE {time_pred}" if time_pred else ""
     if grain is None:
-        return [
-            f"JOIN (SELECT max({tc}) AS __as_at FROM {model.fact}{where}) AS __asat",
-            f"  ON fact.{tc} = __asat.__as_at",
-        ]
+        return f"SELECT max({tc}) AS __as_at FROM {model.fact}{where}"
     g_bare = grain_expr(grain, tc, model.fiscal_year_start)
+    return (
+        f"SELECT {g_bare} AS __period, max({tc}) AS __as_at\n"
+        f"      FROM {model.fact}{where} GROUP BY 1"
+    )
+
+
+def _asat_join(model: Model, grain: str | None, time_op) -> list[str]:
+    sub = _asat_subquery(model, grain, time_op)
+    tc = model.time_column
+    if grain is None:
+        return [f"JOIN ({sub}) AS __asat", f"  ON fact.{tc} = __asat.__as_at"]
     g_fact = grain_expr(grain, f"fact.{tc}", model.fiscal_year_start)
     return [
-        f"JOIN (SELECT {g_bare} AS __period, max({tc}) AS __as_at",
-        f"      FROM {model.fact}{where} GROUP BY 1) AS __asat",
+        f"JOIN ({sub}) AS __asat",
         f"  ON {g_fact} = __asat.__period AND fact.{tc} = __asat.__as_at",
     ]
 
@@ -406,7 +414,10 @@ def compile_slice(
             lines.append("WHERE " + _complete_predicate(model, grain, "period"))
     if grain is not None:
         lines.append("ORDER BY period")
-    return Compiled(sql="\n".join(lines), applied=applied, ignored=ignored)
+    asat = {"base": _asat_subquery(model, grain, time_op)} if model.snapshot else None
+    return Compiled(
+        sql="\n".join(lines), applied=applied, ignored=ignored, asat_queries=asat
+    )
 
 
 def _fytd_lines(model, measures, ctx_attrs, time_op, grain, group_aliases,
@@ -474,6 +485,9 @@ def _assemble_compare(
     ctes: list[tuple[str, list[str]]] = [("__out", out_lines)]
     joins: list[str] = []
     scan_lo: dict = {}
+    asat: dict | None = (
+        {"base": _asat_subquery(model, grain, time_op)} if model.snapshot else None
+    )
     group_conds = [
         f"IS NOT DISTINCT FROM b.{g}" for g in group_aliases if g != "period"
     ]
@@ -498,6 +512,8 @@ def _assemble_compare(
                 cell_n=suppress is not None,
             )
             scan_lo[cmp] = shifted.lo if isinstance(shifted, Between) else None
+            if asat is not None:
+                asat[cmp] = _asat_subquery(model, grain, shifted)
             shift = f"INTERVAL {months} MONTH" if months else f"INTERVAL {days} DAY"
             conds = [f"{name}.period = b.period - {shift}"]
             ctes.append((name, cte_lines))
@@ -531,4 +547,7 @@ def _assemble_compare(
         *tail,
         "ORDER BY period",
     ])
-    return Compiled(sql=sql, applied=applied, ignored=ignored, scan_lo=scan_lo)
+    return Compiled(
+        sql=sql, applied=applied, ignored=ignored, scan_lo=scan_lo,
+        asat_queries=asat,
+    )

@@ -20,6 +20,50 @@ PERIOD_INTERVAL = {
 }
 
 
+_PERIOD_MONTHS = {"month": 1, "quarter": 3, "year": 12, "fy": 12, "fy_quarter": 3}
+
+
+def _month_add(d: date, n: int) -> date:
+    y, m = divmod(d.year * 12 + d.month - 1 + n, 12)
+    return date(y, m + 1, 1)
+
+
+def period_start(d: date, grain: str, fiscal_year_start: int) -> date:
+    """Pure-Python mirror of grain_expr for provenance arithmetic."""
+    from datetime import timedelta
+
+    if grain == "day":
+        return d
+    if grain == "week":
+        return d - timedelta(days=d.weekday())
+    if grain == "month":
+        return d.replace(day=1)
+    if grain == "quarter":
+        return date(d.year, ((d.month - 1) // 3) * 3 + 1, 1)
+    if grain == "year":
+        return date(d.year, 1, 1)
+    if grain == "fy":
+        return fy_start(d, fiscal_year_start)
+    if grain == "fy_quarter":
+        shift = fiscal_year_start - 1
+        s = _month_add(d.replace(day=1), -shift)
+        q = date(s.year, ((s.month - 1) // 3) * 3 + 1, 1)
+        return _month_add(q, shift)
+    raise SemanticsError(f"unknown grain '{grain}' — valid grains: {', '.join(GRAINS)}")
+
+
+def period_end(d: date, grain: str, fiscal_year_start: int) -> date:
+    """Last day of the period containing `d`."""
+    from datetime import timedelta
+
+    if grain == "day":
+        return d
+    s = period_start(d, grain, fiscal_year_start)
+    if grain == "week":
+        return s + timedelta(days=6)
+    return _month_add(s, _PERIOD_MONTHS[grain]) - timedelta(days=1)
+
+
 def fy_start(d: date, fiscal_year_start: int) -> date:
     """First day of the fiscal year containing `d` (pure-Python mirror of
     the SQL shift trick)."""
