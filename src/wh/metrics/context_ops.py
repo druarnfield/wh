@@ -111,8 +111,16 @@ def _check_op(key: str, op):
 
 def _coerce(key: str, value):
     if isinstance(value, _OPS):
-        if key == "time" and isinstance(value, Between):
-            value = Between(_as_date(value.lo), _as_date(value.hi))
+        if key == "time":
+            # non-range ops would bypass compare's scan widening — the
+            # design's named silent-NULL failure class
+            if not isinstance(value, (Between, LastPeriods, All)):
+                raise SemanticsError(
+                    "time= takes a (start, end) range, wh.last(...), wh.all() "
+                    "or a widget — not point/membership ops"
+                )
+            if isinstance(value, Between):
+                value = Between(_as_date(value.lo), _as_date(value.hi))
         return _check_op(key, value)
     if hasattr(value, "value"):                      # widget: resolve later
         return value

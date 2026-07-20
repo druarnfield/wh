@@ -24,7 +24,8 @@ from .timegrain import period_end
 
 # scalar keys that carry meaning; everything else scalar is serializer noise
 _KEEP = {"class", "type", "function_name", "schema", "distinct", "value",
-         "is_operator", "catalog"}
+         "is_operator", "catalog",
+         "id", "try_cast"}   # type descriptors: CAST targets are semantics
 _FOLD = {"function_name", "schema", "catalog"}      # SQL-case-insensitive
 
 
@@ -201,7 +202,7 @@ class Provenance:
             for cmp, lo in compiled.scan_lo.items():
                 if lo is None:
                     coverage = "unbounded window"
-                elif fact_min is not None and _as_dateval(fact_min) > lo:
+                elif fact_min is not None and _as_dateval(fact_min) > _as_dateval(lo):
                     coverage = (
                         f"fact data begins {_iso(fact_min)} — {cmp} window "
                         f"partially uncovered"
@@ -241,6 +242,8 @@ class Provenance:
 
     def _refreshed_at(self, c, table: str):
         parts = table.split(".")
+        if len(parts) > 2:            # catalog-qualified: meta can't match it
+            return None
         schema, name = parts if len(parts) == 2 else ("main", parts[0])
         try:
             (ts,) = c.execute(
@@ -264,7 +267,7 @@ class Provenance:
             f"{k} {'in ' + repr(list(v['in'])) if 'in' in v else ''}"
             f"{'= ' + str(v['eq']) if 'eq' in v else ''}"
             f"{'not ' + str(v['not']) if 'not' in v else ''}"
-            f"{'in ' + v['between'][0] + '..' + v['between'][1] if 'between' in v else ''}"
+            f"{'in ' + str(v['between'][0]) + '..' + str(v['between'][1]) if 'between' in v else ''}"
             for k, v in self.context["applied"].items()
         ]
         ctx_bits += [f"{k}: empty selection → unfiltered"
@@ -288,10 +291,10 @@ class Provenance:
         for cmp, sc in self.data["scan"].items():
             lines.append(f"{cmp}: scan widened to {sc['lo']}, {sc['coverage']}")
         if self.data["as_at"]:
-            base = self.data["as_at"].get("base") or []
-            if base:
-                latest = base[-1][1]
-                lines.append(f"snapshot as-at {latest} (latest period)")
+            for lane, rows in self.data["as_at"].items():
+                if rows:      # "FY25 as-at Jun 30 vs FY24 as-at Jun 28"
+                    label = "snapshot" if lane == "base" else lane
+                    lines.append(f"{label} as-at {rows[-1][1]} (latest period)")
         if self.data["truncation"]:
             lines.append(self.data["truncation"])
         if s["non_additive"]:

@@ -51,7 +51,16 @@ def _shift_back(v, months: int, days: int):
 def _shift_op(op, months: int, days: int):
     if not isinstance(op, Between):
         return op
-    return Between(_shift_back(op.lo, months, days), _shift_back(op.hi, months, days))
+    lo = _shift_back(op.lo, months, days)
+    if isinstance(op.hi, datetime):
+        hi = _shift_back(op.hi, months, days)
+    else:
+        # shift the EXCLUSIVE bound so period ends map to period ends:
+        # Jun 30 - 1 month must be May 31, and Feb 28 - 1 year must be
+        # Feb 29 in a leap year — day-clamping the inclusive bound would
+        # silently drop end-of-month rows from every comparison
+        hi = _shift_back(op.hi + timedelta(days=1), months, days) - timedelta(days=1)
+    return Between(lo, hi)
 
 
 def _check_compare(model: Model, measures, compare, grain) -> None:
@@ -59,6 +68,8 @@ def _check_compare(model: Model, measures, compare, grain) -> None:
         return
     if grain is None:
         raise SemanticsError("compare= needs grain= (a period axis to shift along)")
+    if len(set(compare)) != len(compare):
+        raise SemanticsError("duplicate compare= entries — list each comparison once")
     for cmp in compare:
         if cmp not in COMPARES:
             raise SemanticsError(
@@ -349,22 +360,29 @@ def _indent(lines: list[str]) -> str:
     return "\n".join("    " + line for line in "\n".join(lines).splitlines())
 
 
-def _complete_predicate(model: Model, grain: str, period_ref: str) -> str:
+def _complete_predicate(model: Model, grain: str, period_ref: str, time_op=None) -> str:
     """Keep only complete periods. Snapshot models with a declared cadence:
     the period's final EXPECTED snapshot landed. Otherwise: the max-date
     rule (period end within the data), which is weaker on snapshot models.
+    A period the context truncates mid-way is by definition incomplete.
     Data max comes from the fact — _mirror.meta records refresh time, not
-    data max."""
+    data max. Known limit: `monthly` cadence only sharpens completeness at
+    grains coarser than month (a month-long tolerance can't distinguish an
+    early partial snapshot from the final expected one within one month)."""
     tc = model.time_column
     period_end = f"{period_ref} + INTERVAL {PERIOD_INTERVAL[grain]} - INTERVAL 1 DAY"
     if model.snapshot and model.cadence in _CADENCE_DAYS:
         days = _CADENCE_DAYS[model.cadence]
         g = grain_expr(grain, tc, model.fiscal_year_start)
-        return (
+        cond = (
             f"(SELECT max({tc}) FROM {model.fact} WHERE {g} = {period_ref})"
             f" > {period_end} - INTERVAL {days} DAY"
         )
-    return f"{period_end} <= (SELECT max({tc}) FROM {model.fact})"
+    else:
+        cond = f"{period_end} <= (SELECT max({tc}) FROM {model.fact})"
+    if isinstance(time_op, Between):
+        cond += f" AND {period_end} <= {_lit(time_op.hi)}"
+    return cond
 
 
 def compile_slice(
@@ -411,7 +429,9 @@ def compile_slice(
         ]
         lines = ["SELECT " + ",\n       ".join(outer), "FROM (", _indent(lines), ")"]
         if complete_periods:
-            lines.append("WHERE " + _complete_predicate(model, grain, "period"))
+            lines.append(
+                "WHERE " + _complete_predicate(model, grain, "period", time_op)
+            )
     if grain is not None:
         lines.append("ORDER BY period")
     asat = {"base": _asat_subquery(model, grain, time_op)} if model.snapshot else None
@@ -468,7 +488,10 @@ def _fytd_lines(model, measures, by, ctx_attrs, time_op, grain, group_aliases,
         "SELECT " + ",\n       ".join(sel),
         f"FROM (SELECT DISTINCT {', '.join(group_aliases)} FROM __out) AS p",
         f"JOIN {model.fact} AS fact",
-        f"  ON {tc} >= {grain_expr('fy', 'p.period', fys)}",
+        # fy-EQUALITY, not >= fy-start: a week/quarter straddling the FY
+        # boundary has its label in the old FY — new-FY rows must roll into
+        # the next period's fytd, never count in two fiscal years at once
+        f"  ON {grain_expr('fy', tc, fys)} = {grain_expr('fy', 'p.period', fys)}",
         f" AND {grain_expr(grain, tc, fys)} <= p.period",
     ]
     for dname in [d for d in model.dims if d in joined]:
@@ -507,10 +530,8 @@ def _assemble_compare(
                 model, measures, by, ctx_attrs, time_op, grain, group_aliases,
                 cell_n=suppress is not None,
             )
-            scan_lo[cmp] = (
-                fy_start(time_op.lo, model.fiscal_year_start)
-                if isinstance(time_op, Between) else None
-            )
+            if isinstance(time_op, Between):   # unbounded fytd is still FY-bounded
+                scan_lo[cmp] = fy_start(time_op.lo, model.fiscal_year_start)
             conds = [f"{name}.period = b.period"]
             ctes.append((name, cte_lines))
         else:
@@ -547,7 +568,7 @@ def _assemble_compare(
     with_block = ", ".join(f"{n} AS (\n{_indent(ls)}\n)" for n, ls in ctes)
     tail = []
     if complete_periods:
-        tail.append("WHERE " + _complete_predicate(model, grain, "b.period"))
+        tail.append("WHERE " + _complete_predicate(model, grain, "b.period", time_op))
     sql = "\n".join([
         "WITH " + with_block,
         "SELECT " + ",\n       ".join(proj),

@@ -139,6 +139,93 @@ def test_ratio_measures_compare_too(con, defs):
     assert got[date(2026, 7, 1)]["pct_over_target_prior"] == june == 0.75
 
 
+# --- adversarial round 2 regressions ---
+
+EVENTS_MIN = (
+    "ev:\n  fact: main.ev\n  time:\n    column: d\n"
+    "  measures:\n    n:\n      expr: count(*)\n      description: x\n"
+)
+
+
+def test_shifted_windows_keep_month_end_days(con, make_defs):
+    """Jun 30 minus one month must be May 31, not day-clamped May 30 —
+    clamping silently drops end-of-month rows from every comparison."""
+    con.execute(
+        "CREATE TABLE main.ev AS FROM (VALUES (DATE '2026-05-15'), "
+        "(DATE '2026-05-31'), (DATE '2026-05-31'), (DATE '2026-06-10')) t(d)"
+    )
+    m = make_defs(EVENTS_MIN)["ev"]
+    rows = run(con, compile_slice(
+        m, ["n"], grain="month", compare=["prior"],
+        ctx=context(time=("2026-06-01", "2026-06-30")),
+    ))
+    assert rows[0]["n_prior"] == 3                       # May 31 rows included
+
+
+def test_yoy_keeps_leap_day(con, make_defs):
+    con.execute(
+        "CREATE TABLE main.leap AS FROM (VALUES (DATE '2024-02-15'), "
+        "(DATE '2024-02-29'), (DATE '2025-02-10')) t(d)"
+    )
+    m = make_defs(EVENTS_MIN.replace("main.ev", "main.leap"))["ev"]
+    rows = run(con, compile_slice(
+        m, ["n"], grain="month", compare=["yoy"],
+        ctx=context(time=("2025-02-01", "2025-02-28")),
+    ))
+    assert rows[0]["n_yoy"] == 2                         # Feb 29 2024 included
+
+
+def test_fytd_never_leaks_the_next_fiscal_year(con, make_defs):
+    """A week straddling Jul 1: its label sits in the old FY, so its fytd
+    covers old-FY rows only; the new-FY rows roll into the NEXT week's fytd
+    — never counted in two fiscal years at once."""
+    con.execute(
+        "CREATE TABLE main.straddle AS FROM (VALUES (DATE '2025-08-15'), "
+        "(DATE '2026-06-29'), (DATE '2026-06-30'), (DATE '2026-07-01'), "
+        "(DATE '2026-07-02'), (DATE '2026-07-08')) t(d)"
+    )
+    m = make_defs(EVENTS_MIN.replace("main.ev", "main.straddle"))["ev"]
+    rows = run(con, compile_slice(m, ["n"], grain="week", compare=["fytd"]))
+    got = {r["period"]: r["n_fytd"] for r in rows}
+    assert got[date(2026, 6, 29)] == 3       # FY25-26: 08-15, 06-29, 06-30
+    assert got[date(2026, 7, 6)] == 3        # FY26-27: 07-01, 07-02, 07-08
+
+
+def test_context_follows_the_comparison_rows(con, defs):
+    """North compares against North-prior-year, never against everyone —
+    Ophthal has 0 clinically-meaningful removals in BOTH months, while the
+    unfiltered June total is 2."""
+    rows = run(con, compile_slice(
+        defs["removals"], ["removals"], grain="month", compare=["prior"],
+        ctx=context(doctor__specialty="Ophthal"),
+    ))
+    got = {r["period"]: r for r in rows}
+    assert got[date(2026, 7, 1)]["removals_prior"] == 0     # June Ophthal, not 2
+
+
+def test_duplicate_compare_entries_error(defs):
+    with pytest.raises(SemanticsError, match="duplicate"):
+        compile_slice(defs["removals"], ["removals"], grain="month",
+                      compare=["prior", "prior"])
+
+
+def test_complete_periods_drops_a_context_truncated_period(con, defs):
+    """A period the context cuts mid-way is by definition incomplete, even
+    when fact data extends past its end."""
+    rows = run(con, compile_slice(
+        defs["removals"], ["removals"], grain="month", complete_periods=True,
+        ctx=context(time=("2026-06-01", "2026-06-15")),
+    ))
+    assert rows == []                        # June truncated at the 15th
+
+
+def test_time_context_rejects_non_range_ops(defs):
+    from wh.metrics.context_ops import not_
+
+    with pytest.raises(SemanticsError, match="range"):
+        context(time=not_(date(2026, 6, 1)))
+
+
 # --- Task 4: fytd from base rows ---
 
 

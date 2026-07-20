@@ -49,6 +49,13 @@ def test_attribute_canaries_only_in_the_extrinsic_lane(
     assert total > 0, "canary context was not compiled at all"
     assert in_asat == 0, "attribute predicate leaked into the as-at subquery"
     assert in_where == total, "context value appeared outside the outer WHERE"
+    if compare:
+        # the context must FOLLOW the comparison rows: every CTE carries it
+        base = compile_slice(defs[model], measures, by=by, ctx=canary_ctx(), grain=grain)
+        _, _, base_total = canary_counts(con, base.sql, ATTR_CANARY)
+        assert total == base_total * (1 + len(compare)), (
+            "a comparison CTE dropped the attribute context"
+        )
 
 
 @pytest.mark.parametrize("model,measures,by,grain,compare", CASES)

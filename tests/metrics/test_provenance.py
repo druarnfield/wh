@@ -176,6 +176,53 @@ def test_to_dict_is_json_serialisable(con, defs):
     assert d["measures"][0]["name"] == "patients_waiting"
 
 
+# --- adversarial round 2: lying hashes, provenance crash ---
+
+
+def test_cast_target_types_are_hash_relevant(con, make_defs):
+    def m(expr):
+        yaml = (
+            "ev:\n  fact: main.ev\n  time:\n    column: d\n"
+            f"  measures:\n    n:\n      expr: {expr}\n      description: x\n"
+        )
+        model = make_defs(yaml)["ev"]
+        return measure_hash(con, model, model.measures["n"])
+
+    assert m("min(cast(d AS VARCHAR))") != m("min(cast(d AS DATE))")
+    assert m("min(cast(d AS INTEGER))") != m("min(try_cast(d AS INTEGER))")
+
+
+def test_ratio_parts_are_hash_relevant(con, defs, make_defs, design_yaml):
+    changed = make_defs(
+        design_yaml["dims"],
+        design_yaml["waitlist"].replace("        den: count(*)", "        den: count(ur)"),
+    )["waitlist"]
+    assert measure_hash(
+        con, defs["waitlist"], defs["waitlist"].measures["pct_over_target"]
+    ) != measure_hash(con, changed, changed.measures["pct_over_target"])
+
+
+def test_provenance_survives_datetime_bounds_with_compare(con, defs):
+    from datetime import datetime
+
+    p = prov(
+        defs, con, grain="month", compare=["prior"],
+        ctx=context(time=(datetime(2026, 6, 1), datetime(2026, 6, 30, 23, 59))),
+    )
+    assert p.data["scan"]["prior"]["coverage"]           # no TypeError
+    assert json.dumps(p.to_dict())
+
+
+def test_render_reports_each_comparisons_own_asat(con, defs):
+    p = prov(
+        defs, con, model="waitlist", measures=["patients_waiting"], grain="month",
+        compare=["prior"], ctx=context(time=("2026-07-01", "2026-07-31")),
+    )
+    text = p.render()
+    assert "snapshot as-at 2026-07-10" in text
+    assert "prior as-at 2026-06-26" in text
+
+
 # --- Task 2: as-at + truncation plumbing ---
 
 

@@ -310,6 +310,12 @@ r = m.slice(
 r.frame()          # preferred-backend frame
 r.view("summary")  # register as view for marimo SQL cells
 r.suppress(n=5)    # small-cell suppression (ratios with suppressed den too)
+                   # NB: thresholds the CELL's raw row count (count(*)), not
+                   # per-measure contributing units — a measure with an
+                   # intrinsic where can show a small filtered count inside a
+                   # big cell. OPEN DECISION (adversarial review 2026-07-20):
+                   # per-measure FILTERed counts would close that; revisit if
+                   # privacy semantics demand it.
 r.sql              # exact generated SQL, formatted, stable
 r.provenance()     # see below
 

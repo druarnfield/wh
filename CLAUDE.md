@@ -69,6 +69,15 @@ SQL Server. Excel/CSV readers for messy business files. Oracle later.
   DESIGN FULLY DELIVERED (steps 0-4). Later per design: curated-schema
   git hash stamp, `wh.compose()` for cross-fact derived numbers,
   complementary suppression, context YAML round-trip.
+- Adversarial round 2 (2026-07-20) over steps 2-4: fixed fytd
+  cross-group contamination, month-end day-clamping in shifted compare
+  windows (shift the EXCLUSIVE bound), fytd FY-boundary leak at
+  straddling week/quarter periods (fy-equality join), CAST types
+  invisible to the hash projection, provenance datetime crash,
+  context-truncated periods surviving complete_periods. OPEN DECISION
+  for Dru: suppression thresholds cell rows, not per-measure filtered
+  counts (documented in the design doc's suppress note). KNOWN LIMIT:
+  monthly cadence completeness is a no-op at month grain (docstring'd).
 - Hash-stability contract: `_project()` in provenance.py KEEPS a known
   scalar-key set and drops everything else — new serializer keys in a
   DuckDB upgrade can't shift hashes; only structural renames could, and
