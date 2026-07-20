@@ -15,7 +15,7 @@ from datetime import date, datetime, timedelta
 from ..errors import SemanticsError
 from .context_ops import All, Between, Context, Eq, In, Not, EMPTY, _months_back
 from .loader import Model
-from .timegrain import grain_expr
+from .timegrain import fy_start, grain_expr
 
 
 @dataclass(frozen=True)
@@ -363,6 +363,57 @@ def compile_slice(
     return Compiled(sql="\n".join(lines), applied=applied, ignored=ignored)
 
 
+def _fytd_lines(model, measures, ctx_attrs, time_op, grain, group_aliases):
+    """Fiscal year-to-date, recomputed from base rows per output period —
+    never a window-sum of period aggregates, so distinct counts and every
+    other aggregate stay correct-from-base. Snapshot models never reach
+    here (fytd is invalid for stocks)."""
+    tc = f"fact.{model.time_column}"
+    fys = model.fiscal_year_start
+    sel = [f"p.{a}" for a in group_aliases]
+    for name in measures:
+        m = model.measures[name]
+        if m.ratio:
+            sel.append(f"{m.ratio[0]} AS __{name}_num")
+            sel.append(f"{m.ratio[1]} AS __{name}_den")
+        else:
+            sel.append(f"{_measure_sql(m)} AS {name}")
+
+    predicates: list[str] = []
+    joined: set[str] = set()
+    if isinstance(time_op, Between):     # mid-period truncation carries in
+        hi = (
+            f"{tc} <= {_lit(time_op.hi)}"
+            if isinstance(time_op.hi, datetime)
+            else f"{tc} < {_lit(time_op.hi)} + INTERVAL 1 DAY"
+        )
+        predicates.append(hi)
+    for _key, lhs, op in ctx_attrs:
+        p = _predicate(lhs, op)
+        if p:
+            predicates.append(p)
+        if "." in lhs.removeprefix("fact."):
+            joined.add(lhs.split(".", 1)[0])
+
+    lines = [
+        "SELECT " + ",\n       ".join(sel),
+        f"FROM (SELECT DISTINCT {', '.join(group_aliases)} FROM __out) AS p",
+        f"JOIN {model.fact} AS fact",
+        f"  ON {tc} >= {grain_expr('fy', 'p.period', fys)}",
+        f" AND {grain_expr(grain, tc, fys)} <= p.period",
+    ]
+    for dname in [d for d in model.dims if d in joined]:
+        dim = model.dims[dname].shared
+        lines.append(
+            f"LEFT JOIN {dim.table} AS {dname} "
+            f"ON fact.{model.dims[dname].fact_column} = {dname}.{dim.key_column}"
+        )
+    if predicates:
+        lines.append("WHERE " + "\n  AND ".join(predicates))
+    lines.append("GROUP BY ALL")
+    return lines
+
+
 def _assemble_compare(
     model, measures, by, ctx_attrs, time_op, grain, compare,
     out_lines, group_aliases, applied, ignored,
@@ -379,14 +430,21 @@ def _assemble_compare(
     for cmp in compare:
         name = f"__cmp_{cmp}"
         if cmp == "fytd":
-            raise SemanticsError("fytd is not implemented yet")   # Task 4
-        months, days = _compare_offset(cmp, grain)
-        shifted = _shift_op(time_op, months, days)
-        cte_lines, _, _ = _inner_lines(model, measures, by, ctx_attrs, shifted, grain)
-        scan_lo[cmp] = shifted.lo if isinstance(shifted, Between) else None
-        shift = f"INTERVAL {months} MONTH" if months else f"INTERVAL {days} DAY"
-        conds = [f"{name}.period = b.period - {shift}"]
-        ctes.append((name, cte_lines))
+            cte_lines = _fytd_lines(model, measures, ctx_attrs, time_op, grain, group_aliases)
+            scan_lo[cmp] = (
+                fy_start(time_op.lo, model.fiscal_year_start)
+                if isinstance(time_op, Between) else None
+            )
+            conds = [f"{name}.period = b.period"]
+            ctes.append((name, cte_lines))
+        else:
+            months, days = _compare_offset(cmp, grain)
+            shifted = _shift_op(time_op, months, days)
+            cte_lines, _, _ = _inner_lines(model, measures, by, ctx_attrs, shifted, grain)
+            scan_lo[cmp] = shifted.lo if isinstance(shifted, Between) else None
+            shift = f"INTERVAL {months} MONTH" if months else f"INTERVAL {days} DAY"
+            conds = [f"{name}.period = b.period - {shift}"]
+            ctes.append((name, cte_lines))
         conds += [
             f"{name}.{g} {cond}"
             for g, cond in zip(

@@ -139,6 +139,54 @@ def test_ratio_measures_compare_too(con, defs):
     assert got[date(2026, 7, 1)]["pct_over_target_prior"] == june == 0.75
 
 
+# --- Task 4: fytd from base rows ---
+
+
+def test_fytd_resets_at_the_fiscal_boundary(con, defs):
+    """June 2026 is FY2025-26; July 2026 starts FY2026-27. July's fytd must
+    be July-only (2), not cumulative-across-FYs (4)."""
+    rows = run(con, compile_slice(
+        defs["removals"], ["removals"], grain="month", compare=["fytd"],
+    ))
+    got = {r["period"]: r for r in rows}
+    assert got[date(2026, 6, 1)]["removals_fytd"] == 2
+    assert got[date(2026, 7, 1)]["removals"] == 2
+    assert got[date(2026, 7, 1)]["removals_fytd"] == 2       # reset, not 4
+
+
+def test_fytd_distinct_counts_come_from_base_not_window_sums(con, make_defs):
+    """A patient attending in two months counts once in fytd — summing the
+    monthly distinct counts would double them."""
+    con.execute(
+        "CREATE TABLE main.att AS FROM (VALUES "
+        "(DATE '2025-08-03','A'), (DATE '2025-08-05','B'), (DATE '2025-09-14','A')"
+        ") t(att_date, ur)"
+    )
+    m = make_defs(
+        "att:\n  fact: main.att\n  time:\n    column: att_date\n"
+        "  measures:\n    patients:\n      expr: count(DISTINCT ur)\n"
+        "      description: d\n"
+    )["att"]
+    rows = run(con, compile_slice(m, ["patients"], grain="month", compare=["fytd"]))
+    got = {r["period"]: r for r in rows}
+    assert got[date(2025, 9, 1)]["patients_fytd"] == 2       # A once, not 2+1=3
+
+
+def test_fytd_respects_the_context_upper_bound(con, defs):
+    """Mid-period truncation carries into fytd: a window ending 07-05 must
+    exclude the 07-08 removal from July's fytd."""
+    rows = run(con, compile_slice(
+        defs["removals"], ["removals"], grain="month", compare=["fytd"],
+        ctx=context(time=("2026-06-01", "2026-07-05")),
+    ))
+    got = {r["period"]: r for r in rows}
+    assert got[date(2026, 7, 1)]["removals_fytd"] == 1       # 07-01 only
+    assert rows and compile_slice(
+        defs["removals"], ["removals"], grain="month", compare=["fytd"],
+        ctx=context(time=("2026-06-01", "2026-07-05")),
+    ).scan_lo == {"fytd": date(2025, 7, 1)}                  # widened to FY start
+
+
 # --- Task 3: snapshot comparisons carry their own as-at ---
 
 
