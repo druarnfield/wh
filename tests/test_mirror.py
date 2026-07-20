@@ -83,6 +83,28 @@ def test_staging_connection_does_not_preserve_insertion_order(tmp_path):
         con.close()
 
 
+def test_parquet_row_group_bytes_cap_applied(tmp_path, monkeypatch):
+    # Fat rows: parquet row groups default to 122,880 rows buffered in
+    # full (per writer thread) before anything is flushed — multi-GB
+    # peaks on wide NVARCHAR tables. The COPY caps row-group BYTES so
+    # writer memory scales with row width, not table size. Tiny cap +
+    # ~1MB of data must therefore split into multiple row groups.
+    import importlib
+
+    import pyarrow.parquet as pq
+
+    # `from wh import mirror` yields the VERB (function), not the submodule
+    mirror_mod = importlib.import_module("wh.mirror")
+    monkeypatch.setattr(mirror_mod, "PARQUET_ROW_GROUP_BYTES", "100KB")
+    # the byte cap is checked at 2048-row granularity, so exceed that
+    rows = {"a": [f"payload-{i:06d}-" * 30 for i in range(5000)]}
+    cfg = make_config(tmp_path, [make_spec("fat", mode="parquet")])
+    build(cfg, fake_extract({"fat": rows}), log=lambda s: None)
+
+    meta = pq.ParquetFile(cfg.parquet_dir / "main" / "fat.parquet").metadata
+    assert meta.num_row_groups > 1
+
+
 def test_failed_build_leaves_live_mirror_untouched(tmp_path):
     cfg = make_config(tmp_path, [make_spec("t1"), make_spec("t2")])
     build(cfg, fake_extract({"t1": {"a": [1]}, "t2": {"a": [2]}}), log=lambda s: None)
