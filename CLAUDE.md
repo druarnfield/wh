@@ -33,14 +33,17 @@ SQL Server. Excel/CSV readers for messy business files. Oracle later.
   in `docs/upstream/` and git history of `docs/plans/2026-07-19-semantics-*`.
   `errors.SemanticsError` and `config.semantics_dir` survive for the
   new layer.
-- Metrics greenfield design AGREED (2026-07-20):
-  `docs/plans/2026-07-20-metrics-design.md` — home-grown two-lane
-  metrics layer (intrinsic FILTER vs extrinsic WHERE, compute-from-base,
-  declared surface, content-hashed provenance) replacing BSL.
-  Implementation plan: `docs/plans/2026-07-20-metrics-phase1.md`
-  (step 0 = BSL removal DONE; step 1 in progress). Code lives in the
-  `src/wh/metrics/` package — submodules never named after verbs
-  (`model`/`slice`/`context`/`frame` — shadowing gotcha).
+- Metrics phase 1 COMPLETE (2026-07-20): rollout steps 0–1 of
+  `docs/plans/2026-07-20-metrics-design.md` (plan:
+  `docs/plans/2026-07-20-metrics-phase1.md`). Delivered: `wh/metrics/`
+  package (loader / context_ops / timegrain / compiler / result /
+  checks), verbs `wh.model`/`wh.slice`/`wh.context`/`not_`/`last`/`all`,
+  two-lane compilation, snapshot global-max as-at, ratios, fiscal
+  grains, strict context, bind-time checks, `wh validate` hook, canary
+  invariant + lane-isolation test suites. Submodules never named after
+  verbs (`model`/`slice`/`context`/`frame` — shadowing gotcha).
+  NEXT: rollout step 2 (`compare=`, `complete_periods`, `.suppress()`),
+  then step 3 (provenance + hashing), step 4 (marimo widgets).
 
 ## Metrics-layer notes (design invariants — keep these true)
 
@@ -54,6 +57,16 @@ SQL Server. Excel/CSV readers for messy business files. Oracle later.
   context → outer `WHERE`; on snapshot models the as-at subquery carries
   time predicates only. Tests assert this on parse trees with canary
   literals — never on SQL text.
+- `json_serialize_sql` trees carry `query_location` keys that vary with
+  whitespace — `tests/metrics/treecheck.py` strips any `*location*` key
+  before comparing. Column refs are dicts with a `column_names` list.
+- tests/metrics helper code lives in uniquely-named modules
+  (`treecheck.py`, `fixtures_data.py`), NEVER imported from conftest —
+  two `conftest.py` files on sys.path make `import conftest` ambiguous.
+- Unresolved contexts (widgets, `wh.last`) resolve at slice time,
+  anchored to `max(time_column)` of the fact — mirror data, never wall
+  clock. Hash/serialise/provenance are defined over resolved contexts
+  only.
 
 ## Phase 4 notes
 

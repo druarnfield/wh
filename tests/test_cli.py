@@ -19,6 +19,47 @@ def test_no_config_found(tmp_path, monkeypatch, capsys):
     assert main(["validate"]) == 2
 
 
+def test_validate_metrics_structural_failure(project, capsys):
+    sdir = project / "semantics"
+    sdir.mkdir()
+    (sdir / "bad.yml").write_text("- not a mapping\n")
+    assert main(["validate", "--config", str(project / "wh.yaml")]) == 2
+    assert "bad.yml" in capsys.readouterr().err
+
+
+def test_validate_metrics_ok_without_mirror(project, capsys):
+    sdir = project / "semantics"
+    sdir.mkdir()
+    (sdir / "m.yml").write_text(
+        "m:\n  fact: t1\n  time:\n    column: d\n"
+        "  measures:\n    n:\n      expr: count(*)\n      description: x\n"
+    )
+    assert main(["validate", "--config", str(project / "wh.yaml")]) == 0
+    out = capsys.readouterr().out
+    assert "1 metric model" in out and "structure only" in out
+
+
+def test_validate_metrics_full_bind_with_mirror(project, capsys):
+    import duckdb
+
+    con = duckdb.connect(str(project / "metrics.duckdb"))
+    con.execute("CREATE TABLE t1 AS SELECT DATE '2026-01-01' AS d")
+    con.close()
+    sdir = project / "semantics"
+    sdir.mkdir()
+    (sdir / "m.yml").write_text(
+        "m:\n  fact: main.no_such\n  time:\n    column: d\n"
+        "  measures:\n    n:\n      expr: count(*)\n      description: x\n"
+    )
+    assert main(["validate", "--config", str(project / "wh.yaml")]) == 2
+    assert "no_such" in capsys.readouterr().err
+
+
+def test_validate_no_semantics_dir_still_ok(project, capsys):
+    assert main(["validate", "--config", str(project / "wh.yaml")]) == 0
+    assert "metric model" not in capsys.readouterr().out
+
+
 def test_mirror_cli_wiring(project, monkeypatch, capsys):
     import duckdb
     import pyarrow as pa
