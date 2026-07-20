@@ -211,14 +211,15 @@ SQL Server. Excel/CSV readers for messy business files. Oracle later.
   still buffers via CTAS. Native-mode mirror tables also still peak at
   ~table size (buffer-pool caching of the new table, bounded by DuckDB's
   memory_limit, spills to disk); parquet mode is the constant-memory lane.
-- Parquet row groups are 122,880 ROWS by default, buffered uncompressed per
-  writer thread before flushing — on wide NVARCHAR tables that alone was
-  multi-GB for ~1M rows even with insertion order off. Mirror COPY caps
-  `ROW_GROUP_SIZE_BYTES` (`PARQUET_ROW_GROUP_BYTES`, 100MB); slim tables
-  hit the row cap first and are unaffected. DuckDB checks the byte cap at
-  2048-row granularity (the guard test needs >2048 rows). Remaining peak
-  on fat tables is the in-flight extract batch — `batch_size` (rows, not
-  bytes) is the per-table knob in wh.yaml for very wide tables.
+- Parquet mode bypasses DuckDB's COPY entirely (`_write_parquet`, pyarrow
+  ParquetWriter): COPY buffers a full row group per WRITER THREAD (thread
+  count = cores) and zero-copy string vectors pin the source Arrow batches
+  under them, so its peak scales with core count x row width — ~3GB and
+  zero disk writes until the end on a many-core box mirroring 1M wide
+  rows, even with insertion order off and row-group byte caps. Direct
+  writing peaks at ~one extract batch and flushes one row group per batch
+  (that's the guard test's observable). `batch_size` (rows, not bytes) in
+  wh.yaml is the per-table knob for very wide tables.
 
 ## Architecture (see design doc for full detail)
 

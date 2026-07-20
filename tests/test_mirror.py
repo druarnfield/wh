@@ -83,26 +83,37 @@ def test_staging_connection_does_not_preserve_insertion_order(tmp_path):
         con.close()
 
 
-def test_parquet_row_group_bytes_cap_applied(tmp_path, monkeypatch):
-    # Fat rows: parquet row groups default to 122,880 rows buffered in
-    # full (per writer thread) before anything is flushed — multi-GB
-    # peaks on wide NVARCHAR tables. The COPY caps row-group BYTES so
-    # writer memory scales with row width, not table size. Tiny cap +
-    # ~1MB of data must therefore split into multiple row groups.
-    import importlib
-
+def test_parquet_written_batchwise_from_reader(tmp_path):
+    # The constant-memory guarantee of parquet mode: each extract batch
+    # is written and flushed as its own row group, so peak memory is one
+    # in-flight batch — never the table, never per-DuckDB-thread row-group
+    # buffers. One row group per batch is the observable contract.
+    import pyarrow as pa
     import pyarrow.parquet as pq
 
-    # `from wh import mirror` yields the VERB (function), not the submodule
-    mirror_mod = importlib.import_module("wh.mirror")
-    monkeypatch.setattr(mirror_mod, "PARQUET_ROW_GROUP_BYTES", "100KB")
-    # the byte cap is checked at 2048-row granularity, so exceed that
-    rows = {"a": [f"payload-{i:06d}-" * 30 for i in range(5000)]}
-    cfg = make_config(tmp_path, [make_spec("fat", mode="parquet")])
-    build(cfg, fake_extract({"fat": rows}), log=lambda s: None)
+    schema = pa.schema([("a", pa.int64())])
 
-    meta = pq.ParquetFile(cfg.parquet_dir / "main" / "fat.parquet").metadata
-    assert meta.num_row_groups > 1
+    def extract(spec):
+        return pa.RecordBatchReader.from_batches(
+            schema,
+            (pa.record_batch([pa.array([i, i])], schema=schema) for i in range(3)),
+        )
+
+    cfg = make_config(tmp_path, [make_spec("t", mode="parquet")])
+    build(cfg, extract, log=lambda s: None)
+
+    meta = pq.ParquetFile(cfg.parquet_dir / "main" / "t.parquet").metadata
+    assert meta.num_row_groups == 3
+    assert q(cfg, 'SELECT count(*) FROM "main"."t"') == [(6,)]
+    assert q(cfg, "SELECT row_count FROM _mirror.meta") == [(6,)]
+
+
+def test_parquet_mode_empty_table(tmp_path):
+    # zero extract batches must still produce a valid (schema-only) file
+    cfg = make_config(tmp_path, [make_spec("e", mode="parquet")])
+    build(cfg, fake_extract({"e": {"a": []}}), log=lambda s: None)
+    assert q(cfg, 'SELECT count(*) FROM "main"."e"') == [(0,)]
+    assert q(cfg, "SELECT row_count FROM _mirror.meta") == [(0,)]
 
 
 def test_failed_build_leaves_live_mirror_untouched(tmp_path):
