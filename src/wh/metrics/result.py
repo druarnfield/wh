@@ -147,6 +147,30 @@ class BoundModel:
             warnings=warnings,
         )
 
+    def values(self, attr: str, context: Context = EMPTY) -> list:
+        """Possible values for a declared attribute. Unscoped shared dims
+        read the dimension table (cheap); with a context, values re-derive
+        from context-scoped fact rows — exclude-your-own-field is your
+        composition: values("facility.clinic", context=ctx.without("facility__clinic"))."""
+        from .compiler import compile_values
+
+        if not context.is_resolved:
+            context = context.resolve(anchor=_bound_anchor(self._ws, self._model))
+        sql = compile_values(self._model, attr, context)
+        return [r[0] for r in self._ws.con.execute(sql).fetchall()]
+
     def __repr__(self):
         m = ", ".join(self._model.measures)
         return f"<wh model '{self._model.name}' — measures: {m}>"
+
+
+def _bound_anchor(ws, model):
+    (anchor,) = ws.con.execute(
+        f"SELECT max({model.time_column}) FROM {model.fact}"
+    ).fetchone()
+    if anchor is None:
+        raise SemanticsError(
+            f"cannot anchor relative time: {model.fact} has no "
+            f"{model.time_column} values"
+        )
+    return anchor

@@ -551,3 +551,43 @@ def _assemble_compare(
         sql=sql, applied=applied, ignored=ignored, scan_lo=scan_lo,
         asat_queries=asat,
     )
+
+
+def compile_values(model: Model, attr: str, ctx: Context = EMPTY) -> str:
+    """Possible values for a declared attribute. Unscoped shared-dim options
+    come from the DIMENSION TABLE — cheap, no fact scan. With a context,
+    options re-derive from context-scoped fact rows through the normal
+    lanes (no snapshot as-at: options mean "ever in scope"). NULL is never
+    an option — membership tests exclude it anyway."""
+    item, dim = _by_item(model, attr)
+    lhs = item.rsplit(" AS ", 1)[0]
+    if not ctx.entries and dim is not None:
+        shared = model.dims[dim].shared
+        col = shared.attributes[attr.partition(".")[2]]
+        return (
+            f"SELECT DISTINCT {col} AS value\nFROM {shared.table}\n"
+            f"WHERE {col} IS NOT NULL\nORDER BY 1"
+        )
+    time_op, ctx_attrs, _applied, _ignored = split_context(model, ctx)
+    joined = {dim} if dim else set()
+    predicates: list[str] = []
+    if time_op is not None:
+        p = _time_predicate(f"fact.{model.time_column}", time_op)
+        if p:
+            predicates.append(p)
+    for _key, p_lhs, op in ctx_attrs:
+        p = _predicate(p_lhs, op)
+        if p:
+            predicates.append(p)
+        if "." in p_lhs.removeprefix("fact."):
+            joined.add(p_lhs.split(".", 1)[0])
+    lines = [f"SELECT DISTINCT {lhs} AS value", f"FROM {model.fact} AS fact"]
+    for dname in [d for d in model.dims if d in joined]:
+        d = model.dims[dname].shared
+        lines.append(
+            f"LEFT JOIN {d.table} AS {dname} "
+            f"ON fact.{model.dims[dname].fact_column} = {dname}.{d.key_column}"
+        )
+    lines.append("WHERE " + "\n  AND ".join(predicates + [f"{lhs} IS NOT NULL"]))
+    lines.append("ORDER BY 1")
+    return "\n".join(lines)
