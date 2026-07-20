@@ -159,6 +159,33 @@ class BoundModel:
         sql = compile_values(self._model, attr, context)
         return [r[0] for r in self._ws.con.execute(sql).fetchall()]
 
+    def filter_dim(self, attr: str, context: Context = EMPTY, label: str | None = None):
+        """A populated mo.ui.multiselect for a declared attribute. An empty
+        selection means unfiltered (pass the widget itself into
+        wh.context(...); its value is read at slice time). Cascading is
+        composition: call this downstream of another widget's context."""
+        mo = _mo()
+        options = {str(v): v for v in self.values(attr, context)}
+        return mo.ui.multiselect(options=options, label=label or attr)
+
+    def filter_date(self, label: str | None = None):
+        """A mo.ui.date_range over the fact's real time bounds; its value is
+        a (start, end) tuple — exactly what time= accepts."""
+        mo = _mo()
+        lo, hi = self._ws.con.execute(
+            f"SELECT CAST(min({self._model.time_column}) AS DATE), "
+            f"CAST(max({self._model.time_column}) AS DATE) FROM {self._model.fact}"
+        ).fetchone()
+        if lo is None:
+            raise SemanticsError(
+                f"{self._model.fact} has no {self._model.time_column} values "
+                f"to bound a date range"
+            )
+        return mo.ui.date_range(
+            start=lo, stop=hi, value=(lo, hi),
+            label=label or self._model.time_column,
+        )
+
     def __repr__(self):
         m = ", ".join(self._model.measures)
         return f"<wh model '{self._model.name}' — measures: {m}>"
@@ -174,3 +201,14 @@ def _bound_anchor(ws, model):
             f"{model.time_column} values"
         )
     return anchor
+
+
+def _mo():
+    try:
+        import marimo as mo
+    except ImportError as e:
+        raise SemanticsError(
+            "marimo isn't installed — `uv add marimo` (widget helpers are "
+            "notebook-only; values() works without it)"
+        ) from e
+    return mo
