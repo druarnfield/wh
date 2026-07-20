@@ -18,6 +18,7 @@ from .cleaning import clean
 from .errors import (
     ConfigError, PushRefused, SchemaMismatch, SemanticsError, SourceError, WhError,
 )
+from .metrics.context_ops import all_ as all, context, last, not_  # noqa: A001
 from .workspace import Workspace
 
 # Initialise submodules whose names collide with the module-level verbs below
@@ -30,6 +31,7 @@ __all__ = [
     "Workspace", "workspace", "connect", "mirror", "freshness",
     "pull", "land", "register", "push",
     "read_excel", "read_csv", "clean",
+    "model", "slice", "context", "not_", "last", "all",
     "WhError", "ConfigError", "SourceError", "PushRefused", "SchemaMismatch",
     "SemanticsError",
 ]
@@ -86,6 +88,16 @@ def _optional_workspace() -> Workspace | None:
     except ConfigError:
         return None
     return workspace()
+
+
+def model(name, **kwargs):
+    """A metric model bound to the mirror; slicing hangs off it."""
+    return workspace().model(name, **kwargs)
+
+
+def slice(model_name, **kwargs):  # noqa: A001 — wh.slice is the design's verb
+    """Sugar: wh.slice('waitlist', measures=[...], ...)"""
+    return workspace().slice(model_name, **kwargs)
 
 
 def read_excel(path, **kwargs):

@@ -36,6 +36,8 @@ class Workspace:
     def __init__(self, config: Config):
         self.config = config
         self._con: duckdb.DuckDBPyConnection | None = None
+        self._metrics_cache: tuple | None = None    # (yaml mtimes key, models)
+        self._metrics_checked: tuple | None = None  # (con, {model: warnings})
 
     @classmethod
     def load(cls, path: str | Path | None = None) -> "Workspace":
@@ -197,6 +199,55 @@ class Workspace:
         from .frames import to_arrow
 
         self.con.register(name, to_arrow(frame))
+
+    def _metric_models(self, reload: bool = False) -> dict:
+        """Loaded metric models. Self-keying cache on YAML paths + mtimes —
+        editing a file reloads automatically; no invalidation hooks."""
+        from .metrics.loader import load_definitions
+
+        d = self.config.semantics_dir
+        if d is None or not d.is_dir():
+            key = None
+        else:
+            key = tuple(sorted(
+                (str(p), p.stat().st_mtime)
+                for p in [*d.glob("*.yml"), *d.glob("*.yaml")]
+            ))
+        if reload or self._metrics_cache is None or self._metrics_cache[0] != key:
+            loaded = (
+                load_definitions(d, self.config.fiscal_year_start) if key else {}
+            )
+            self._metrics_cache = (key, loaded)
+        return self._metrics_cache[1]
+
+    def model(self, name: str, reload: bool = False):
+        """One metric model, bound to the mirror (bind checks run once per
+        connection). Slicing hangs off it: ws.model('x').slice(...)."""
+        from .errors import SemanticsError
+        from .metrics.result import BoundModel
+
+        models = self._metric_models(reload)
+        if name not in models:
+            available = ", ".join(sorted(models)) or (
+                f"none — add YAML files to {self.config.semantics_dir}"
+            )
+            raise SemanticsError(f"no metric model '{name}' (available: {available})")
+        return BoundModel(models[name], self)
+
+    def slice(self, model_name: str, **kwargs):
+        return self.model(model_name).slice(**kwargs)
+
+    def _bind_warnings(self, model) -> list:
+        """Bind-check cache, self-keying on connection identity."""
+        from .metrics.checks import bind_checks
+
+        con = self.con
+        if self._metrics_checked is None or self._metrics_checked[0] is not con:
+            self._metrics_checked = (con, {})
+        cache = self._metrics_checked[1]
+        if model.name not in cache:
+            cache[model.name] = bind_checks(con, model)
+        return cache[model.name]
 
     def _backend(self, backend: str | None) -> str:
         from .frames import default_backend

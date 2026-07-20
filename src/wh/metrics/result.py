@@ -76,3 +76,40 @@ class Slice:
 
     def __repr__(self):
         return f"<wh slice of '{self._model.name}' — .frame() / .sql / .view(name)>"
+
+
+class BoundModel:
+    """A metric model bound to a workspace's mirror. Bind checks run on
+    first use per connection; their warnings are exposed on `.warnings`."""
+
+    def __init__(self, model: Model, ws):
+        self._model = model
+        self._ws = ws
+
+    @property
+    def name(self) -> str:
+        return self._model.name
+
+    @property
+    def warnings(self) -> list:
+        return self._ws._bind_warnings(self._model)
+
+    def slice(
+        self,
+        measures: list[str],
+        by: list[str] = (),
+        context: Context = EMPTY,
+        grain: str | None = None,
+        strict_context: bool | None = None,
+    ) -> Slice:
+        self._ws._bind_warnings(self._model)     # validate before first query
+        return Slice(
+            self._model, measures, by=by, ctx=context, grain=grain,
+            strict_context=strict_context,
+            con=lambda: self._ws.con,
+            preferred_backend=self._ws.config.frames,
+        )
+
+    def __repr__(self):
+        m = ", ".join(self._model.measures)
+        return f"<wh model '{self._model.name}' — measures: {m}>"
