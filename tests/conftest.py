@@ -48,51 +48,6 @@ def messy_xlsx(tmp_path):
     return p
 
 
-@pytest.fixture
-def semantic_project(project):
-    """project + a built mini-mirror (waitlist, files.clinics) + model YAML."""
-    import duckdb
-
-    con = duckdb.connect(str(project / "metrics.duckdb"))
-    con.execute(
-        "CREATE TABLE waitlist AS SELECT * FROM (VALUES "
-        "('U1','Cardio','C1',40),('U2','Cardio','C2',10),('U3','Ortho','C1',60)"
-        ") t(patient_ur, specialty, clinic_code, wait_days)"
-    )
-    con.execute("CREATE SCHEMA files")
-    con.execute(
-        "CREATE TABLE files.clinics AS SELECT * FROM (VALUES "
-        "('C1','North'),('C2','South')) t(code, region)"
-    )
-    con.close()
-    sdir = project / "semantics"
-    sdir.mkdir()
-    (sdir / "waitlist.yml").write_text(
-        "waitlist:\n"
-        "  table: waitlist\n"
-        "  dimensions:\n"
-        "    specialty: _.specialty\n"
-        "    clinic:\n"
-        "      expr: _.clinic_code\n"
-        "      is_entity: true\n"
-        "  measures:\n"
-        "    patients_waiting: _.patient_ur.nunique()\n"
-        "    median_wait_days: _.wait_days.median()\n"
-    )
-    (sdir / "clinics.yml").write_text(
-        "clinics:\n"
-        "  table: files.clinics\n"
-        "  dimensions:\n"
-        "    code:\n"
-        "      expr: _.code\n"
-        "      is_entity: true\n"
-        "    region: _.region\n"
-        "  measures:\n"
-        "    n_clinics: _.count()\n"
-    )
-    return project
-
-
 def make_spec(name, schema="main", mode="native", **kw):
     return TableSpec(
         name=name, source=SourceRef(query=f"SELECT * FROM {name}"),

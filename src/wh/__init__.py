@@ -30,7 +30,6 @@ __all__ = [
     "Workspace", "workspace", "connect", "mirror", "freshness",
     "pull", "land", "register", "push",
     "read_excel", "read_csv", "clean",
-    "models", "model", "frame",
     "WhError", "ConfigError", "SourceError", "PushRefused", "SchemaMismatch",
     "SemanticsError",
 ]
@@ -87,18 +86,6 @@ def _optional_workspace() -> Workspace | None:
     except ConfigError:
         return None
     return workspace()
-
-
-def models(**kwargs):
-    return workspace().models(**kwargs)
-
-
-def model(name):
-    return workspace().model(name)
-
-
-def frame(obj, **kwargs):
-    return workspace().frame(obj, **kwargs)
 
 
 def read_excel(path, **kwargs):

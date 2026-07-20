@@ -34,15 +34,7 @@ df = wh.clean(raw,                       # composable cleaners, polars or pandas
 df = wh.read_csv("easy.csv")             # DuckDB's sniffing reader
 wh.read_excel("messy.xlsx", land="files.raw")   # or straight into the .duckdb
 
-# semantic layer (optional extra): define metrics once, same numbers everywhere
-wl = wh.model("waitlist")                     # from semantics/*.yml, bound to the mirror
-df = wh.frame(                                # frame() converts anything to your backend
-    wl.filter(_.Category == "1")
-      .group_by("Specialty")
-      .aggregate("patients_waiting", "median_wait_days")
-)
-
-# coming later: oracle source, append/upsert push
+# coming later: metrics layer (in development), oracle source, append/upsert push
 ```
 
 `read_excel` takes `sheet=` (name or index), `header=` (`"auto"` default, an
@@ -71,8 +63,8 @@ Into an analysis project:
 # core (mirror, pull/land/register, push, csv)
 uv add "warehouse-tools @ git+https://github.com/druarnfield/wh"
 
-# with extras — excel reader and/or the semantic layer
-uv add "warehouse-tools[excel,semantics] @ git+https://github.com/druarnfield/wh"
+# with the excel reader extra
+uv add "warehouse-tools[excel] @ git+https://github.com/druarnfield/wh"
 
 # working on wh itself
 uv add --editable /path/to/wh
@@ -122,47 +114,13 @@ wh mirror --only waitlist   # refresh one table; the rest carry over
 A failed build never touches the live `.duckdb` or parquet files. Freshness
 metadata lives in `_mirror.meta` inside the database.
 
-## Semantic layer
+## Metrics layer
 
-Install the `[semantics]` extra (see Install) and drop model YAML into
-`semantics/` next to `wh.yaml` (dir configurable via `semantics: dir:`):
-
-```yaml
-waitlist:
-  table: outpatient_waitlist_current   # bare = main schema; files.x for others
-  dimensions:
-    Specialty: _.Specialty             # keep the column's exact case, or use
-    Category:                          # a genuinely different name — a case-
-      expr: _.Category                 # only rename is refused (upstream bug)
-      description: "Urgency category"
-  measures:
-    patients_waiting: _.PatUrnCoded.nunique()
-    median_wait_days: _.WaitingTime.median()
-```
-
-`wh` wraps no query API: [BSL's fluent
-API](https://github.com/boringdata/boring-semantic-layer) is the query
-language (`.filter/.group_by/.aggregate/.sql()`); `wh.model()` looks up,
-`wh.frame()` converts results (or any frame-ish object) to your backend.
-`wh validate` checks models — structure always, full binding when the
-mirror file exists.
-
-**Joins:** YAML-declared `joins:` load but querying them is broken upstream
-in BSL 0.3.15 (a strict-xfail test watches for the fix). Until then, two
-working options: pre-join at the mirror layer (a query-defined table in
-`wh.yaml` — best for joins you want centralised), or query-time joins via
-the fluent API, which work fully:
-
-```python
-wl.join_one(clinics, on=lambda l, r: l.clinic_code == r.code) \
-  .group_by("clinics.region").aggregate("patients")   # dims prefixed after a join
-```
-
-**marimo note:** the variable panel can't inspect a bare semantic table
-(upstream: BSL overrides ibis's `schema()` method as a property, which
-breaks narwhals). Harmless but noisy — bind models to underscore-prefixed
-names (`_wl = wh.model(...)`), or chain inline and bind only the
-`wh.frame(...)` result.
+In development — a home-grown metrics layer (versioned measure definitions
+over fact tables, free slicing that structurally cannot alter a measure's
+meaning, full provenance on every number). Design:
+`docs/plans/2026-07-20-metrics-design.md`. The earlier BSL-based semantic
+layer was removed.
 
 ## Development
 

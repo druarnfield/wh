@@ -28,52 +28,32 @@ SQL Server. Excel/CSV readers for messy business files. Oracle later.
   readers, configless module-level fallback. Plan:
   `docs/plans/2026-07-19-warehouse-tools-phase4.md`.
 - Design fully delivered. Later: Oracle source, append/upsert push.
-- Semantics phase COMPLETE (2026-07-19): BSL integration —
-  `models()`/`model()`/`frame()`, `[semantics]` extra, validate check.
-  Design: `docs/plans/2026-07-19-semantics-design.md` (adversarially
-  reviewed); plan: `docs/plans/2026-07-19-semantics-phase.md`.
-- BSL VERDICT (2026-07-20): rejected — not usable, design disagreed
-  with. To be REMOVED (rollout step 0 of the metrics design). The
-  "Semantics notes" section below is historical until removal lands;
-  delete it in the same commit that removes `semantics.py`.
+- BSL semantic layer: built 2026-07-19, REMOVED 2026-07-20 (rejected —
+  not usable, design disagreed with). Upstream-bug knowledge preserved
+  in `docs/upstream/` and git history of `docs/plans/2026-07-19-semantics-*`.
+  `errors.SemanticsError` and `config.semantics_dir` survive for the
+  new layer.
 - Metrics greenfield design AGREED (2026-07-20):
   `docs/plans/2026-07-20-metrics-design.md` — home-grown two-lane
   metrics layer (intrinsic FILTER vs extrinsic WHERE, compute-from-base,
-  declared surface, content-hashed provenance) replacing BSL. New module
-  will be `metrics.py` (never `model.py`/`slice.py` — verb shadowing).
-  Next: implementation plan for rollout steps 0–1.
+  declared surface, content-hashed provenance) replacing BSL.
+  Implementation plan: `docs/plans/2026-07-20-metrics-phase1.md`
+  (step 0 = BSL removal DONE; step 1 in progress). Code lives in the
+  `src/wh/metrics/` package — submodules never named after verbs
+  (`model`/`slice`/`context`/`frame` — shadowing gotcha).
 
-## Semantics notes
+## Metrics-layer notes (design invariants — keep these true)
 
-- wh owns NO query semantics: BSL's fluent API is the query language. An
-  earlier metric() kwargs wrapper was designed and deliberately killed —
-  do not reintroduce a query dialect.
-- Loading is merge-then-one-call (`from_config` on all files merged):
-  per-file `from_yaml` breaks cross-file join references. BSL 0.3.15
-  DECLARED-join querying is broken (poisons all queries on a joining
-  model); `test_join_dimension_query` is strict-xfail and will flag the
-  fixing release. QUERY-TIME joins work fully:
-  `wl.join_one(other, on=lambda l, r: l.raw_col == r.raw_col)` — on= gets
-  RAW tables, and dims are model-prefixed afterwards ("wl.specialty").
-  Do NOT build a shim replaying YAML joins: through join_one (query
-  dialect); recommend mirror-level pre-joins for centralised joins.
-  Upstream issue draft: docs/upstream/bsl-join-query-issue.md (not yet
-  filed — user to approve). Also to file: raw-column error messages;
-  case-only rename bug below; SemanticModel.schema property-vs-method LSP
-  break (crashes narwhals/marimo inspection — advise underscore-prefixed
-  marimo vars).
-- Case-only NAME collisions break BSL/ibis execution with obscure schema
-  errors — and it's broader than renames: any dim/measure name colliding
-  case-insensitively with ANY table column (even computed exprs). Two
-  guards: `merge_model_files` lints simple `_.Col` renames (no binding
-  needed), `_check_name_collisions` covers everything at bind time with
-  real columns in hand. Keep exact column case or a genuinely different name.
-- Caches are SELF-KEYING on connection/backend object identity (`ws.con is
-  cached_con`). Never add invalidation hooks — they miss reopen paths.
-- Module `semantics.py` vs verbs `models/model/frame`; `frames.py` module
-  vs `frame` verb — names differ deliberately (shadowing gotcha).
-- BSL is 0.x, pinned `>=0.3.15,<0.4`; churn (including YAML) is absorbed
-  in semantics.py only. Upgrades are deliberate.
+- Case-insensitive name collisions against real table columns caused
+  obscure engine errors in the BSL era; the new layer's bind-time checks
+  should keep guarding names with real columns in hand.
+- Caches are SELF-KEYING on connection object identity (`ws.con is
+  cached_con`) plus YAML mtimes. Never add invalidation hooks — they
+  miss reopen paths.
+- Two lanes are the guarantee: intrinsic `where` → `FILTER (WHERE ...)`,
+  context → outer `WHERE`; on snapshot models the as-at subquery carries
+  time predicates only. Tests assert this on parse trees with canary
+  literals — never on SQL text.
 
 ## Phase 4 notes
 
@@ -171,6 +151,8 @@ SQL Server. Excel/CSV readers for messy business files. Oracle later.
 
 ## Conventions
 
+- NO worktrees — never suggest or create them. Dru works on ordinary
+  branches in the main checkout; feature work happens right here.
 - TDD, strictly: failing test → verify fail → implement → verify pass → commit.
 - Never mention Claude in commit messages.
 - Notebook-friendly errors: all inherit `WhError`; one clear sentence + the fix.

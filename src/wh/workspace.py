@@ -36,8 +36,6 @@ class Workspace:
     def __init__(self, config: Config):
         self.config = config
         self._con: duckdb.DuckDBPyConnection | None = None
-        self._ibis_cache: tuple | None = None     # (con, ibis backend)
-        self._models_cache: tuple | None = None   # (ibis backend, models dict)
 
     @classmethod
     def load(cls, path: str | Path | None = None) -> "Workspace":
@@ -199,48 +197,6 @@ class Workspace:
         from .frames import to_arrow
 
         self.con.register(name, to_arrow(frame))
-
-    def _ibis(self):
-        """Ibis backend over the session connection. Self-keying cache:
-        rebuilt whenever the underlying connection object changed (mirror
-        swap, manual close(), death) — no invalidation hooks anywhere."""
-        from .semantics import _import_bsl
-
-        con = self.con
-        if self._ibis_cache is None or self._ibis_cache[0] is not con:
-            _bsl, ibis = _import_bsl()
-            self._ibis_cache = (con, ibis.duckdb.from_connection(con))
-        return self._ibis_cache[1]
-
-    def models(self, reload: bool = False) -> dict:
-        """All semantic models, bound to the mirror. reload=True re-reads YAML."""
-        from .semantics import load_models
-
-        backend = self._ibis()
-        if reload or self._models_cache is None or self._models_cache[0] is not backend:
-            d = self.config.semantics_dir
-            loaded = load_models(d, backend) if d is not None and d.is_dir() else {}
-            self._models_cache = (backend, loaded)
-        return self._models_cache[1]
-
-    def model(self, name: str):
-        """One semantic model by name; BSL's fluent API hangs off it."""
-        from .errors import SemanticsError
-
-        models = self.models()
-        if name not in models:
-            available = ", ".join(sorted(models)) or (
-                f"none — add YAML files to {self.config.semantics_dir}"
-            )
-            raise SemanticsError(f"no semantic model '{name}' (available: {available})")
-        return models[name]
-
-    def frame(self, obj, backend: str | None = None):
-        """Convert anything frame-ish (BSL query, ibis expr, pandas/polars,
-        DuckDB relation, Arrow) to the preferred backend."""
-        from .frames import from_arrow, to_arrow
-
-        return from_arrow(to_arrow(obj), self._backend(backend))
 
     def _backend(self, backend: str | None) -> str:
         from .frames import default_backend
