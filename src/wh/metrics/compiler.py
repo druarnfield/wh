@@ -420,12 +420,14 @@ def compile_slice(
     )
 
 
-def _fytd_lines(model, measures, ctx_attrs, time_op, grain, group_aliases,
+def _fytd_lines(model, measures, by, ctx_attrs, time_op, grain, group_aliases,
                 cell_n=False):
     """Fiscal year-to-date, recomputed from base rows per output period —
     never a window-sum of period aggregates, so distinct counts and every
-    other aggregate stay correct-from-base. Snapshot models never reach
-    here (fytd is invalid for stocks)."""
+    other aggregate stay correct-from-base. Fact rows join back to their
+    OWN group's period rows (IS NOT DISTINCT FROM per by-column) — a
+    time-only join would silently absorb every other group's rows.
+    Snapshot models never reach here (fytd is invalid for stocks)."""
     tc = f"fact.{model.time_column}"
     fys = model.fiscal_year_start
     sel = [f"p.{a}" for a in group_aliases]
@@ -454,6 +456,13 @@ def _fytd_lines(model, measures, ctx_attrs, time_op, grain, group_aliases,
             predicates.append(p)
         if "." in lhs.removeprefix("fact."):
             joined.add(lhs.split(".", 1)[0])
+
+    for entry in by:              # each fact row counts toward ITS group only
+        item, dim = _by_item(model, entry)
+        expr, alias = item.rsplit(" AS ", 1)
+        predicates.append(f"{expr} IS NOT DISTINCT FROM p.{alias}")
+        if dim:
+            joined.add(dim)       # dim joins land before the WHERE, so this is legal
 
     lines = [
         "SELECT " + ",\n       ".join(sel),
@@ -495,7 +504,7 @@ def _assemble_compare(
         name = f"__cmp_{cmp}"
         if cmp == "fytd":
             cte_lines = _fytd_lines(
-                model, measures, ctx_attrs, time_op, grain, group_aliases,
+                model, measures, by, ctx_attrs, time_op, grain, group_aliases,
                 cell_n=suppress is not None,
             )
             scan_lo[cmp] = (

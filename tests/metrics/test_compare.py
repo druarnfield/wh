@@ -172,6 +172,19 @@ def test_fytd_distinct_counts_come_from_base_not_window_sums(con, make_defs):
     assert got[date(2025, 9, 1)]["patients_fytd"] == 2       # A once, not 2+1=3
 
 
+def test_fytd_stays_within_its_own_group(con, defs):
+    """July has North and South removals; North's fytd must not absorb
+    South's rows through the period join."""
+    rows = run(con, compile_slice(
+        defs["removals"], ["removals"], by=["facility.region"],
+        grain="month", compare=["fytd"],
+    ))
+    got = {(r["period"], r["facility.region"]): r for r in rows}
+    july = date(2026, 7, 1)
+    assert got[(july, "North")]["removals_fytd"] == 1     # C1 TRANSFER only
+    assert got[(july, "South")]["removals_fytd"] == 1     # C3 TREATED only
+
+
 def test_fytd_respects_the_context_upper_bound(con, defs):
     """Mid-period truncation carries into fytd: a window ending 07-05 must
     exclude the 07-08 removal from July's fytd."""
