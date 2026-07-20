@@ -67,6 +67,18 @@ SQL Server. Excel/CSV readers for messy business files. Oracle later.
   anchored to `max(time_column)` of the fact — mirror data, never wall
   clock. Hash/serialise/provenance are defined over resolved contexts
   only.
+- `datetime` IS a `date` subclass — `_lit` must test datetime BEFORE
+  date or timestamps silently render as `DATE '...'` and DuckDB floors
+  them (this moved snapshot as-at moments a week early pre-review).
+  Time ranges compile day-inclusive (`>= lo AND < hi + 1 day`), never
+  `BETWEEN ... DATE 'hi'`.
+- Aggregate detection trick: `SELECT <expr> FROM fact WHERE 1=0` yields
+  exactly 1 row for aggregates, 0 for per-row exprs (which GROUP BY ALL
+  would silently turn into grouping columns).
+- YAML names/columns are spliced into SQL unquoted — loader validates
+  them as plain identifiers (`fact`/`period`/`time` + `__*` reserved).
+  Adversarial review (2026-07-20) proved the injection: a measure named
+  `"n, wait_days AS smuggled"` regrouped a total into per-row output.
 
 ## Phase 4 notes
 

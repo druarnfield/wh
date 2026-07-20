@@ -75,7 +75,7 @@ def test_local_dim_needs_no_join(con, make_defs, design_yaml):
     assert_sql_equiv(con, c.sql, """
         SELECT fact.urgency_code AS urgency, count(*) AS n
         FROM main.events AS fact
-        WHERE fact.urgency_code <> 'Cat 3'
+        WHERE fact.urgency_code IS DISTINCT FROM 'Cat 3'
         GROUP BY ALL
     """)
 
@@ -187,6 +187,24 @@ def test_unknown_attribute_on_declared_dim_errors(defs):
 def test_shared_dim_context_without_attribute_errors(defs):
     with pytest.raises(SemanticsError, match="facility__"):
         compile_slice(defs["removals"], ["removals"], ctx=context(facility="C1"))
+
+
+def test_attr_syntax_on_a_local_dim_is_ignored_not_an_error(defs):
+    """Miss rule symmetry: 'urgency__band' can't apply to waitlist (local
+    dim, no attributes) — skipped and recorded, same as on any other model,
+    so one context works across a model set. strict_context still catches it."""
+    c = compile_slice(defs["waitlist"], ["long_waiters"], ctx=context(urgency__band="x"))
+    assert c.ignored == ("urgency__band",)
+
+
+def test_time_in_by_points_at_grain(defs):
+    with pytest.raises(SemanticsError, match="grain"):
+        compile_slice(defs["removals"], ["removals"], by=["time"])
+
+
+def test_empty_measures_is_an_error(defs):
+    with pytest.raises(SemanticsError, match="measure"):
+        compile_slice(defs["removals"], [])
 
 
 def test_unresolved_context_is_refused(defs):

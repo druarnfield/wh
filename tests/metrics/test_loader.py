@@ -168,3 +168,28 @@ def test_local_dim_cannot_be_a_mapping(make_defs):
 def test_model_without_measures_errors(make_defs):
     with pytest.raises(SemanticsError, match="measure"):
         make_defs("m:\n  fact: t\n  time:\n    column: c\n")
+
+
+def test_measure_names_cannot_smuggle_sql(make_defs):
+    """Names are spliced unquoted into SELECT; a crafted one would inject a
+    grouping column past GROUP BY ALL and silently change the result grain."""
+    inj = MODEL_MIN.replace("    removals:\n", "    'n, wait_days AS smuggled':\n")
+    with pytest.raises(SemanticsError, match="name"):
+        make_defs(inj)
+
+
+@pytest.mark.parametrize("bad", ["fact", "period", "time", "__asat", "with space"])
+def test_dim_names_cannot_collide_with_compiler_aliases(make_defs, bad):
+    yaml = (
+        f"m:\n  fact: t\n  time:\n    column: c\n"
+        f"  dimensions:\n    '{bad}': x\n"
+        f"  measures:\n    n:\n      expr: count(*)\n      description: d\n"
+    )
+    with pytest.raises(SemanticsError, match="name"):
+        make_defs(yaml)
+
+
+def test_fact_table_must_be_a_plain_identifier(make_defs):
+    bad = MODEL_MIN.replace("fact: main.removals", "fact: main.removals; DROP TABLE x")
+    with pytest.raises(SemanticsError, match="fact table"):
+        make_defs(bad)

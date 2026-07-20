@@ -84,6 +84,17 @@ def test_unresolved_context_refuses_to_be_data():
         ctx.to_dict()
 
 
+def test_context_values_must_be_scalars():
+    with pytest.raises(SemanticsError, match="NULL"):
+        context(facility__region=None)
+    with pytest.raises(SemanticsError, match="scalars"):
+        context(facility__region=[["North"], "South"])   # nested list slip
+    with pytest.raises(SemanticsError, match="non-finite"):
+        context(urgency=float("nan"))
+    with pytest.raises(SemanticsError, match="wh.all"):
+        context(facility__region=In(()))                 # empty op, direct
+
+
 def test_resolve_is_idempotent_and_plain_contexts_are_born_resolved():
     ctx = context(facility__region="North")
     assert ctx.is_resolved

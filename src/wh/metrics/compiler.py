@@ -49,7 +49,9 @@ def _predicate(lhs: str, op) -> str | None:
     if isinstance(op, In):
         return f"{lhs} IN ({', '.join(_lit(x) for x in op.values)})"
     if isinstance(op, Not):
-        return f"{lhs} <> {_lit(op.value)}"
+        # IS DISTINCT FROM: "not Cat 3" plainly includes rows where the
+        # attribute is NULL/unknown — <> would silently drop them
+        return f"{lhs} IS DISTINCT FROM {_lit(op.value)}"
     if isinstance(op, Between):
         return f"{lhs} BETWEEN {_lit(op.lo)} AND {_lit(op.hi)}"
     raise SemanticsError(f"cannot compile context op {type(op).__name__}")
@@ -102,10 +104,8 @@ def split_context(model: Model, ctx: Context):
             continue
         if ref.shared is None:
             if attr:
-                raise SemanticsError(
-                    f"local dimension '{dname}' has no attributes — use plain "
-                    f"'{dname}='"
-                )
+                ignored.append(key)      # can't apply here — miss rule, not error
+                continue
             lhs = f"fact.{ref.fact_column}"
         else:
             if not attr:
@@ -125,14 +125,25 @@ def split_context(model: Model, ctx: Context):
     return time_op, attrs, tuple(applied), tuple(ignored)
 
 
+def _by_surface(model: Model) -> str:
+    parts = []
+    for name, ref in model.dims.items():
+        if ref.shared:
+            parts += [f"{name}.{a}" for a in ref.shared.attributes]
+        else:
+            parts.append(name)
+    return ", ".join(parts) or "none (no dimensions declared)"
+
+
 def _by_item(model: Model, entry: str) -> tuple[str, str | None]:
     """-> (select item, joined dim name or None)."""
     dname, _, attr = entry.partition(".")
+    if dname == "time":
+        raise SemanticsError("time is sliced via grain=, not by=")
     ref = model.dims.get(dname)
     if ref is None:
         raise SemanticsError(
-            f"unknown by= entry '{entry}' — declared surface: "
-            f"{_declared_surface(model)}"
+            f"unknown by= entry '{entry}' — declared surface: {_by_surface(model)}"
         )
     if ref.shared is None:
         if attr:
@@ -190,6 +201,8 @@ def compile_slice(
     ctx: Context = EMPTY,
     grain: str | None = None,
 ) -> Compiled:
+    if not measures:
+        raise SemanticsError("slice() needs at least one measure")
     for name in measures:
         if name not in model.measures:
             raise SemanticsError(

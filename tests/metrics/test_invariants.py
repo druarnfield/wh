@@ -51,3 +51,5 @@ def test_time_canaries_only_in_where_lanes(con, defs, model, measures, by, grain
     in_where, in_asat, total = canary_counts(con, c.sql, TIME_CANARY)
     assert total > 0
     assert in_where + in_asat == total, "time value appeared outside WHERE lanes"
+    if defs[model].snapshot:
+        assert in_asat > 0, "as-at subquery lost its time truncation"

@@ -45,7 +45,8 @@ class Slice:
         ).fetchone()
         if anchor is None:
             raise SemanticsError(
-                f"cannot anchor relative time: {self._model.fact} is empty"
+                f"cannot anchor relative time: {self._model.fact} has no "
+                f"{self._model.time_column} values"
             )
         return anchor
 

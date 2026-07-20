@@ -16,7 +16,8 @@ from .loader import Model
 
 def bind_checks(con, model: Model) -> list[str]:
     """Raise on definition errors; return data-quality warnings."""
-    _check_intrinsic_wheres(con, model)
+    _check_fact_only_refs(con, model)
+    _check_measures_aggregate(con, model)
     _explain_representative_query(con, model)
     warnings: list[str] = []
     seen_tables = set()
@@ -41,13 +42,13 @@ def _fact_columns(con, model: Model) -> set[str]:
     return {r[0].lower() for r in rows}
 
 
-def _column_refs(con, fact: str, predicate: str) -> list[list[str]]:
-    (raw,) = con.execute(
-        "SELECT json_serialize_sql(?)", [f"SELECT 1 FROM {fact} WHERE {predicate}"]
-    ).fetchone()
+def _column_refs(con, sql: str, described: str) -> list[list[str]]:
+    (raw,) = con.execute("SELECT json_serialize_sql(?)", [sql]).fetchone()
     tree = json.loads(raw)
     if tree.get("error"):
-        raise SemanticsError(f"unparseable predicate '{predicate}': {tree.get('error_message')}")
+        raise SemanticsError(
+            f"unparseable {described}: {tree.get('error_message')}"
+        )
     refs: list[list[str]] = []
 
     def walk(node):
@@ -64,19 +65,58 @@ def _column_refs(con, fact: str, predicate: str) -> list[list[str]]:
     return refs
 
 
-def _check_intrinsic_wheres(con, model: Model) -> None:
-    """Identity lives in git; dimension state does not — an intrinsic
-    predicate over a type-1 attribute would mutate under a stable hash."""
+def _measure_parts(m) -> list[tuple[str, str, str]]:
+    """(label, sql fragment, wrapping query) per definition piece."""
+    parts = []
+    if m.where:
+        parts.append(("intrinsic predicate", m.where, "SELECT 1 FROM {fact} WHERE {x}"))
+    if m.expr:
+        parts.append(("expr", m.expr, "SELECT {x} FROM {fact}"))
+    if m.ratio:
+        parts.append(("ratio num", m.ratio[0], "SELECT {x} FROM {fact}"))
+        parts.append(("ratio den", m.ratio[1], "SELECT {x} FROM {fact}"))
+    return parts
+
+
+def _check_fact_only_refs(con, model: Model) -> None:
+    """Identity lives in git; dimension state does not — a definition
+    depending on a type-1 attribute would mutate under a stable hash.
+    Applies to exprs and ratio parts as much as to intrinsic predicates."""
     cols = _fact_columns(con, model)
     for m in model.measures.values():
-        if not m.where:
-            continue
-        for ref in _column_refs(con, model.fact, m.where):
-            if len(ref) > 1 or ref[0].lower() not in cols:
+        for label, fragment, template in _measure_parts(m):
+            sql = template.format(fact=model.fact, x=fragment)
+            for ref in _column_refs(con, sql, f"{label} of measure '{m.name}'"):
+                if len(ref) > 1 or ref[0].lower() not in cols:
+                    raise SemanticsError(
+                        f"model '{model.name}': measure '{m.name}': {label} may "
+                        f"reference fact columns only — '{'.'.join(ref)}' is "
+                        f"not a column of {model.fact}"
+                    )
+
+
+def _check_measures_aggregate(con, model: Model) -> None:
+    """An aggregate over zero rows yields exactly one row; a per-row expr
+    yields zero. A non-aggregate expr would become a grouping column under
+    GROUP BY ALL and silently change the result grain."""
+    for m in model.measures.values():
+        for label, fragment, template in _measure_parts(m):
+            if label == "intrinsic predicate":
+                continue
+            try:
+                rows = con.execute(
+                    f"SELECT {fragment} FROM {model.fact} WHERE 1=0"
+                ).fetchall()
+            except duckdb.Error as e:
                 raise SemanticsError(
-                    f"model '{model.name}': measure '{m.name}': intrinsic "
-                    f"predicates may reference fact columns only — "
-                    f"'{'.'.join(ref)}' is not a column of {model.fact}"
+                    f"model '{model.name}': measure '{m.name}': {label} does "
+                    f"not compile: {e}"
+                ) from e
+            if len(rows) != 1:
+                raise SemanticsError(
+                    f"model '{model.name}': measure '{m.name}': {label} must "
+                    f"be an aggregate expression — '{fragment}' returns one "
+                    f"value per fact row, which would silently regroup results"
                 )
 
 

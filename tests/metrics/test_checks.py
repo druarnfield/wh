@@ -31,6 +31,24 @@ def test_intrinsic_where_may_reference_fact_columns_only(con, make_defs, design_
         bind_checks(con, make_defs(design_yaml["dims"], ghost)["removals"])
 
 
+def test_measure_expr_may_reference_fact_columns_only(con, make_defs, design_yaml):
+    bad = design_yaml["removals"].replace(
+        "expr: count(*)", "expr: count(DISTINCT facility.region)"
+    )
+    with pytest.raises(SemanticsError, match="fact columns"):
+        bind_checks(con, make_defs(design_yaml["dims"], bad)["removals"])
+
+
+def test_non_aggregate_expr_is_rejected(con, make_defs, design_yaml):
+    """A per-row expr would become a grouping column under GROUP BY ALL and
+    silently explode a one-row total into one row per fact row."""
+    bad = design_yaml["waitlist"].replace(
+        "expr: median(wait_days)", "expr: wait_days - 0"
+    )
+    with pytest.raises(SemanticsError, match="aggregate"):
+        bind_checks(con, make_defs(design_yaml["dims"], bad)["waitlist"])
+
+
 def test_duplicate_dim_key_errors_naming_the_table(con, make_defs, design_yaml):
     con.execute(
         "CREATE TABLE main.bad_dim AS FROM (VALUES "

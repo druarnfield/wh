@@ -6,7 +6,26 @@ lagging clinic (C3 absent from the June-final 06-26 snapshot)."""
 import pytest
 
 from wh.metrics.compiler import compile_slice
-from wh.metrics.context_ops import context
+from wh.metrics.context_ops import context, not_
+
+
+def test_not_keeps_null_rows(con, make_defs):
+    """wh.not_('Cat 1') is IS DISTINCT FROM: rows with a NULL attribute are
+    'not Cat 1' and must stay in governed totals."""
+    con.execute(
+        "CREATE TABLE main.null_events AS FROM (VALUES "
+        "(DATE '2026-01-01','Cat 1'), (DATE '2026-01-02',NULL), "
+        "(DATE '2026-01-03','Cat 2')) t(event_date, urgency_code)"
+    )
+    m = make_defs(
+        "nev:\n  fact: main.null_events\n  time:\n    column: event_date\n"
+        "  dimensions:\n    urgency: urgency_code\n"
+        "  measures:\n    n:\n      expr: count(*)\n      description: d\n"
+    )["nev"]
+    rows = con.execute(
+        compile_slice(m, ["n"], ctx=context(urgency=not_("Cat 1"))).sql
+    ).fetchall()
+    assert rows == [(2,)]                      # NULL row counted, Cat 1 excluded
 
 
 def run(con, compiled):

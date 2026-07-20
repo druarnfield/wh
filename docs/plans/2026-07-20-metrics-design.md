@@ -129,18 +129,29 @@ Rules:
   is guaranteed by construction; homonyms across models are impossible
   for shared dims. Contexts apply by shared-dim identity, not name
   coincidence. Local (degenerate) dims remain per-model for genuinely
-  private attributes; a local dim shadowing a shared dim's name is a
-  load error.
+  private attributes. **Known v1 limitation:** the single-string dim
+  syntax cannot distinguish "reference the shared dim" from "declare a
+  local dim", so name match = shared reference; declaring a NEW shared
+  dim whose name matches an existing local dim silently converts that
+  local dim into a join reference at next load (it fails loudly at
+  query time, not wrongly, but the load error this rule originally
+  wanted needs an explicit `local:` marker syntax — deferred).
 - `description` is **required** on every measure (load error without).
   An auditable definition without prose isn't one.
 - `where` on a measure is intrinsic: immutable at query time,
   hash-relevant, rendered in provenance. First-class and encouraged —
   this is where "what counts as a removal" lives, in a diff.
-  **Intrinsic predicates may reference fact columns only** (load error
-  otherwise, enforced via the parse tree against the fact's schema
-  fingerprint): a definition whose identity depended on type-1
-  dimension attributes would mutate under a stable hash as the dim
-  table changes. Identity lives in git; dimension state does not.
+  **Intrinsic predicates — and measure exprs and ratio parts — may
+  reference fact columns only** (bind error otherwise, enforced via the
+  parse tree against the fact's schema): a definition whose identity
+  depended on type-1 dimension attributes would mutate under a stable
+  hash as the dim table changes. Identity lives in git; dimension state
+  does not. Exprs and ratio parts must also be **aggregates** (checked
+  at bind time: an aggregate over zero rows yields exactly one row) —
+  a per-row expr would become a grouping column under `GROUP BY ALL`
+  and silently change the result grain. All YAML names and columns are
+  validated as plain SQL identifiers at load (they are spliced unquoted;
+  `fact`/`period`/`time` and `__`-prefixed names are reserved).
 - `additive: false` marks measures whose result rows must not be
   re-summed (distinct counts, medians, ratios are implicitly
   non-additive). Carried into provenance; see Provenance.
@@ -235,9 +246,15 @@ merged = ctx | overrides                      # right side wins per attribute
 ```
 
 - Ops vocabulary (v1): equality, `in`, `not_`, range/between (date
-  ranges **inclusive on both ends** — `BETWEEN` semantics, matching the
-  FY example above), relative-time helpers (`wh.last(12, "month")`).
-  Nothing else; no SQL.
+  ranges **day-inclusive on both ends**, matching the FY example above —
+  compiled as `>= lo AND < hi + 1 day`, never `BETWEEN ... DATE 'hi'`,
+  so TIMESTAMP time columns keep the whole end day; datetime bounds are
+  exact), relative-time helpers (`wh.last(12, "month")`). Nothing else;
+  no SQL. `not_` compiles as `IS DISTINCT FROM`: "not Cat 3" includes
+  rows whose attribute is NULL — `<>` would silently drop the unknowns
+  from governed totals. Context values must be scalars or dates; NULL,
+  nested lists, and non-finite numbers are load errors (`wh.null` is a
+  future op).
 - Attribute addressing `dimension__attribute` (double-underscore) at the
   Python surface, `dimension.attribute` in `by=`.
 - **Miss rule:** context entries apply by **shared-dim identity** — an
@@ -246,7 +263,10 @@ merged = ctx | overrides                      # right side wins per attribute
   recorded* for models that don't (provenance lists `applied` and
   `ignored` separately). Homonym collisions are impossible for shared
   dims by construction; local-dim entries apply only to the declaring
-  model. `slice(..., strict_context=True)` turns ignored entries into
+  model, and `dim__attr` syntax against a local dim is likewise
+  skipped-and-recorded (a local dim has no attributes; erroring would
+  break one context applied across a model set).
+  `slice(..., strict_context=True)` turns ignored entries into
   errors for governed outputs.
 - **Empty selections:** an empty value from a *widget* means "no
   selection" → unfiltered, recorded in provenance as

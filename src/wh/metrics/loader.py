@@ -17,6 +17,35 @@ from ..errors import SemanticsError
 
 VALID_TIME_AGG = ("sum", "last", "avg", "none")
 
+# Names and columns are spliced into SQL unquoted — validate them at load.
+_IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+_TABLE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*")
+_RESERVED = frozenset({"fact", "period", "time"})   # compiler-owned aliases
+
+
+def _check_name(fname: str, kind: str, name, reserved=_RESERVED) -> None:
+    if (
+        not isinstance(name, str)
+        or not _IDENT.fullmatch(name)
+        or name.startswith("__")
+        or name.lower() in reserved
+    ):
+        raise SemanticsError(
+            f"{fname}: invalid {kind} name {name!r} — letters, digits and "
+            f"underscores only, not starting with '__', not fact/period/time"
+        )
+
+
+def _check_column(fname: str, kind: str, name) -> None:
+    _check_name(fname, kind, name, reserved=frozenset())
+
+
+def _check_table(fname: str, kind: str, name) -> None:
+    if not isinstance(name, str) or not _TABLE.fullmatch(name):
+        raise SemanticsError(
+            f"{fname}: invalid {kind} {name!r} — plain schema.table identifiers only"
+        )
+
 # distinct counts, medians, modes: summing their result rows is meaningless
 _IMPLICITLY_NON_ADDITIVE = re.compile(r"\bDISTINCT\b|\bmedian\s*\(|\bmode\s*\(", re.I)
 _HAS_FILTER = re.compile(r"\bFILTER\b", re.I)
@@ -62,7 +91,7 @@ class Model:
     fiscal_year_start: int
 
 
-def load_definitions(directory: Path, fiscal_year_start: int = 1) -> dict:
+def load_definitions(directory: Path, fiscal_year_start: int) -> dict:
     """Merge semantics/*.yml|*.yaml into {model_name: Model}.
 
     Top-level key `dimensions:` declares shared dims (defined once, ever);
@@ -107,6 +136,9 @@ def _parse_shared_dims(fname, spec, dims, dim_origin) -> None:
             raise SemanticsError(
                 f"{fname}: dimension '{name}' needs 'table' and 'key_column' keys"
             )
+        _check_name(fname, "dimension", name)
+        _check_table(fname, "dimension table", d["table"])
+        _check_column(fname, "key_column", d["key_column"])
         attrs = d.get("attributes")
         if not isinstance(attrs, dict) or not attrs or not all(
             isinstance(v, str) for v in attrs.values()
@@ -115,6 +147,9 @@ def _parse_shared_dims(fname, spec, dims, dim_origin) -> None:
                 f"{fname}: dimension '{name}' needs 'attributes:' mapping "
                 f"attribute names to columns"
             )
+        for attr, col in attrs.items():
+            _check_column(fname, f"attribute of '{name}'", attr)
+            _check_column(fname, f"attribute column of '{name}'", col)
         hierarchy = tuple(d.get("hierarchy") or ())
         for level in hierarchy:
             if level not in attrs:
@@ -132,11 +167,13 @@ def _parse_shared_dims(fname, spec, dims, dim_origin) -> None:
 def _parse_model(fname, name, spec, shared_dims, fiscal_year_start) -> Model:
     if not isinstance(spec, dict) or not isinstance(spec.get("fact"), str):
         raise SemanticsError(f"{fname}: model '{name}' needs a 'fact:' key (a table)")
+    _check_table(fname, "fact table", spec["fact"])
     time = spec.get("time")
     if not isinstance(time, dict) or not isinstance(time.get("column"), str):
         raise SemanticsError(
             f"{fname}: model '{name}' needs 'time:' with a 'column:' key"
         )
+    _check_column(fname, "time column", time["column"])
     snapshot = bool(spec.get("snapshot", False))
 
     dims: dict[str, DimRef] = {}
@@ -147,6 +184,8 @@ def _parse_model(fname, name, spec, shared_dims, fiscal_year_start) -> Model:
                 f"column name — shared dims are declared under top-level "
                 f"'dimensions:', not inline"
             )
+        _check_name(fname, "dimension", dname)
+        _check_column(fname, f"fact column of '{dname}'", v)
         dims[dname] = DimRef(shared=shared_dims.get(dname), fact_column=v)
 
     raw_measures = spec.get("measures")
@@ -169,6 +208,7 @@ def _parse_model(fname, name, spec, shared_dims, fiscal_year_start) -> Model:
 
 def _parse_measure(fname, model, mname, m, snapshot) -> Measure:
     where = f"model '{model}': measure '{mname}'"
+    _check_name(fname, "measure", mname)
     if not isinstance(m, dict):
         raise SemanticsError(f"{fname}: {where} must be a mapping")
     if not m.get("description"):

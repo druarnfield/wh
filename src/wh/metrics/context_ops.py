@@ -10,6 +10,7 @@ defined over.
 from __future__ import annotations
 
 import calendar
+import math
 from dataclasses import dataclass
 from datetime import date, timedelta
 
@@ -71,28 +72,61 @@ def _as_date(v):
     return date.fromisoformat(v) if isinstance(v, str) else v
 
 
+def _empty_error(key: str) -> SemanticsError:
+    return SemanticsError(
+        f"'{key}' got a literal empty selection — if this came from an empty "
+        f"widget, pass the widget itself (its value is read at slice time) "
+        f"or use wh.all() to mean unfiltered"
+    )
+
+
+def _check_scalar(key: str, v) -> None:
+    if v is None:
+        raise SemanticsError(
+            f"'{key}': NULL isn't matchable in a context yet (wh.null is a "
+            f"future op) — filter NULLs in the measure or the curated schema"
+        )
+    if isinstance(v, float) and not math.isfinite(v):
+        raise SemanticsError(f"'{key}': non-finite context value {v!r}")
+    if not isinstance(v, (str, int, float, bool, date)):
+        raise SemanticsError(
+            f"'{key}': context values must be scalars or dates — got "
+            f"{type(v).__name__} ({v!r})"
+        )
+
+
+def _check_op(key: str, op):
+    if isinstance(op, In):
+        if not op.values:
+            raise _empty_error(key)
+        for v in op.values:
+            _check_scalar(key, v)
+    elif isinstance(op, (Eq, Not)):
+        _check_scalar(key, op.value)
+    elif isinstance(op, Between):
+        _check_scalar(key, op.lo)
+        _check_scalar(key, op.hi)
+    return op
+
+
 def _coerce(key: str, value):
     if isinstance(value, _OPS):
         if key == "time" and isinstance(value, Between):
-            return Between(_as_date(value.lo), _as_date(value.hi))
-        return value
+            value = Between(_as_date(value.lo), _as_date(value.hi))
+        return _check_op(key, value)
     if hasattr(value, "value"):                      # widget: resolve later
         return value
     if key == "time":
         if isinstance(value, (tuple, list)) and len(value) == 2:
-            return Between(_as_date(value[0]), _as_date(value[1]))
+            return _check_op(key, Between(_as_date(value[0]), _as_date(value[1])))
         raise SemanticsError(
             "time= takes a (start, end) range, wh.last(...), or a widget"
         )
     if isinstance(value, (tuple, list)):
         if not value:
-            raise SemanticsError(
-                f"'{key}' got a literal empty list — if this came from an empty "
-                f"widget, pass the widget itself (its value is read at slice "
-                f"time) or use wh.all() to mean unfiltered"
-            )
-        return In(tuple(value))
-    return Eq(value)
+            raise _empty_error(key)
+        return _check_op(key, In(tuple(value)))
+    return _check_op(key, Eq(value))
 
 
 def _months_back(d: date, months: int) -> date:
