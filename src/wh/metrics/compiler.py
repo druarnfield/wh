@@ -591,6 +591,10 @@ def compile_values(model: Model, attr: str, ctx: Context = EMPTY) -> str:
     an option — membership tests exclude it anyway."""
     item, dim = _by_item(model, attr)
     lhs = item.rsplit(" AS ", 1)[0]
+    # an untouched widget resolves to All() — "effectively unfiltered" must
+    # take the same lane as "unfiltered", or option lists flicker as other
+    # widgets pass through their empty state
+    ctx = Context({k: v for k, v in ctx.entries.items() if not isinstance(v, All)})
     if not ctx.entries and dim is not None:
         shared = model.dims[dim].shared
         col = shared.attributes[attr.partition(".")[2]]

@@ -91,3 +91,24 @@ def test_widget_contexts_resolve_in_values(con, defs):
 def test_unknown_attr_names_the_surface(defs):
     with pytest.raises(SemanticsError, match="facility"):
         compile_values(defs["waitlist"], "facility.galaxy")
+
+
+def test_all_only_context_reads_the_dim_table_like_no_context(con, defs):
+    from wh.metrics.compiler import compile_values
+    from wh.metrics.context_ops import All, Context
+
+    # a clinic no fact row references: only the dim-table lane can see it
+    con.execute(
+        "INSERT INTO main.clinic_dim VALUES "
+        "('C9','Mountain Clinic','H9','Alpine','South')"
+    )
+    bare = [r[0] for r in con.execute(
+        compile_values(defs["removals"], "facility.clinic")
+    ).fetchall()]
+    allctx = [r[0] for r in con.execute(
+        compile_values(
+            defs["removals"], "facility.clinic",
+            Context({"facility__region": All()}),
+        )
+    ).fetchall()]
+    assert allctx == bare
