@@ -89,6 +89,9 @@ that identity is what lets one context apply across models.
 
 ### Models
 
+Unknown keys anywhere in a definition are a load error — typos never
+silently change a model's semantics.
+
 | Key | Required | Meaning |
 |---|---|---|
 | `fact:` | yes | The fact table (`schema.table`). |

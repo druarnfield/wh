@@ -193,3 +193,64 @@ def test_fact_table_must_be_a_plain_identifier(make_defs):
     bad = MODEL_MIN.replace("fact: main.removals", "fact: main.removals; DROP TABLE x")
     with pytest.raises(SemanticsError, match="fact table"):
         make_defs(bad)
+
+
+# --- strict keys (hardening Task 1) ---
+
+
+def test_unknown_model_key_errors_with_hint(make_defs):
+    with pytest.raises(SemanticsError, match="snapshot"):
+        make_defs("""\
+census:
+  fact: main.f
+  snapsot: true
+  time: {column: d}
+  measures:
+    n: {description: n, expr: "count(*)"}
+""")
+
+
+def test_unknown_measure_key_errors(make_defs):
+    with pytest.raises(SemanticsError, match="unknown key"):
+        make_defs("""\
+census:
+  fact: main.f
+  time: {column: d}
+  measures:
+    n: {description: n, expr: "count(*)", wear: "1=1"}
+""")
+
+
+def test_unknown_time_key_errors(make_defs):
+    with pytest.raises(SemanticsError, match="cadence"):
+        make_defs("""\
+census:
+  fact: main.f
+  time: {column: d, cadense: daily}
+  measures:
+    n: {description: n, expr: "count(*)"}
+""")
+
+
+def test_unknown_shared_dim_key_errors(make_defs):
+    with pytest.raises(SemanticsError, match="unknown key"):
+        make_defs("""\
+dimensions:
+  facility:
+    table: main.dim
+    key_colunm: code
+    attributes: {name: label}
+""")
+
+
+def test_unknown_ratio_key_errors(make_defs):
+    with pytest.raises(SemanticsError, match="unknown key"):
+        make_defs("""\
+census:
+  fact: main.f
+  time: {column: d}
+  measures:
+    pct:
+      description: p
+      ratio: {num: "count(*)", denum: "count(*)"}
+""")
