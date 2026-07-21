@@ -21,3 +21,6 @@ start.sql
 
 # Hypothesis example database
 .hypothesis/
+
+# mutmut scratch (mutated copy of the repo) + result db
+mutants/
