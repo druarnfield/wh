@@ -28,7 +28,30 @@ so that correctness is *demonstrated*, not just asserted:
 
 ## Guarantee traceability
 
-(filled in as tasks land; final table in Task 10)
+Every documented guarantee names the tests that hold it (all names
+grep-verified against the suite):
+
+| Guarantee (docs/metrics.md) | Tests |
+|---|---|
+| Two-lane isolation (intrinsic FILTER vs context WHERE) | `test_invariants.py` (canary literals), `test_differential.py::test_plain_slices_match_the_oracle` |
+| As-at never moves under attribute context | `test_invariants.py` (attribute canary vs `__asat`), oracle `_asat_filter` in every snapshot differential |
+| Day-inclusive time ranges, exact datetime bounds | `test_compiler.py::test_time_context_is_day_inclusive_on_both_ends`, `test_mutation_gaps.py::test_to_window_bounds_are_exact`, `test_properties.py::test_splitting_the_window_partitions_counts` |
+| Compare: shifted windows, period-end mapping, gaps stay NULL | `test_compare.py`, `test_differential.py::test_compare_slices_match_the_oracle`, `test_properties.py::test_prior_equals_the_direct_value_of_the_previous_period`, `test_mutation_gaps.py` (day/week/datetime shifted-window cases) |
+| fytd recomputed from base, FY-bounded, group-isolated, empty=gap | `test_compare.py::test_fytd_*` (6 tests), oracle `_fytd_cells` differential, `test_mutation_gaps.py::test_fytd_lane_with_ratio_context_and_shared_dim` |
+| Suppression: cell rows under n go NULL; ratio den rule; per-lane comparison counts | `test_suppress.py`, `test_differential.py::test_suppress_and_complete_periods_match_the_oracle`, `test_mutation_gaps.py::test_suppress_guards_comparison_columns_by_their_own_lane` |
+| Completeness: max-date rule, cadence rule, context truncation | `test_slice_behaviour.py` / `test_compare.py` completeness tests, the suppress/complete differential, `test_mutation_gaps.py` (window-truncated + fiscal-grain cadence cases) |
+| Loader firewall: identifiers validated, strict keys, totality | `test_loader.py` (32 tests), `test_fuzz_loader.py` (arbitrary YAML + structure-aware mutation) |
+| Output namespace: every column named exactly once | `test_compiler.py::test_duplicate_output_columns_error`, `result_map`'s exact-column assert in every differential, `test_fuzz_loader.py::test_context_values_never_break_the_generated_sql` |
+| Context miss rule: skipped and recorded, never halts | `test_context.py`, `test_mutation_gaps.py::test_ignored_entry_does_not_swallow_later_entries` |
+| Hash stability across engine upgrades | `test_provenance.py::test_measure_hash_ignores_serializer_and_formatting_noise` (+ 4 hash-relevance tests), `scripts/engine_matrix.sh` |
+
+## Engine matrix
+
+`bash scripts/engine_matrix.sh` runs `tests/metrics` against the pinned
+DuckDB and the latest release. As of 2026-07-21 both legs resolve 1.5.4
+(pin == latest) and pass; the second leg starts earning its keep on the
+next DuckDB release. A latest-leg failure is the script working — note
+it, don't pin around it.
 
 ## Mutation baseline
 

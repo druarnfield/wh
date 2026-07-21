@@ -93,6 +93,17 @@ SQL Server. Excel/CSV readers for messy business files. Oracle later.
   DuckDB upgrade can't shift hashes; only structural renames could, and
   the stamped duckdb version explains those. Don't "improve" it to
   keep-all-minus-noise; the allowlist IS the stability mechanism.
+- Test harness COMPLETE (2026-07-21): trust-contract layers per
+  `docs/plans/2026-07-21-metrics-test-harness.md` — generative spec
+  vocabulary (`tests/metrics/strategies.py`), independent oracle +
+  differential (plain/compare/suppress/complete), metamorphic
+  properties, loader totality fuzzing, mutation baseline (timegrain
+  96%, context_ops 91%, compiler 88.5% killed; survivor ledger and
+  procedure in `docs/testing.md`), engine matrix script. Findings
+  fixed along the way: NUL bytes in context values broke `_lit`,
+  loader crashed on non-mapping `dimensions:`, and two doc
+  clarifications (empty ungrouped slice = one row; empty fytd cell =
+  NULL gap, not 0).
 
 ## Metrics-layer notes (design invariants — keep these true)
 
@@ -142,6 +153,17 @@ SQL Server. Excel/CSV readers for messy business files. Oracle later.
   load error. Never restore name-based auto-linking.
 - Provenance data is captured at `frame()` on the executing connection;
   `provenance()` must not re-derive data-side facts for executed slices.
+- `tests/metrics/oracle.py` must NEVER import `wh.*` — its independence
+  from the compiler is what makes differential agreement evidence; the
+  duplication with timegrain/compiler is deliberate. Do not "refactor"
+  it away.
+- New compiler features are not done until they have an oracle
+  interpretation (differential) or an explicit metamorphic property —
+  structural tests alone don't count as coverage for semantics.
+- Generative tests carry `@pytest.mark.fuzz` (default profile 40
+  examples keeps `uv run pytest` fast); `HYPOTHESIS_PROFILE=deep` is
+  the nightly-strength run. `docs/testing.md` is the harness reference:
+  guarantee-traceability table, mutation survivor ledger, budgets.
 
 ## Phase 4 notes
 
@@ -189,6 +211,9 @@ SQL Server. Excel/CSV readers for messy business files. Oracle later.
 
 - `uv run pytest` — full suite; SQL Server integration tests auto-skip
 - `WH_TEST_DSN='Server=localhost,1433;Database=ExecReporting;UID=sa;PWD=...;Encrypt=no;TrustServerCertificate=yes;' uv run pytest` — include integration tests (local dev server)
+- `HYPOTHESIS_PROFILE=deep uv run pytest tests/metrics -m fuzz` — deep generative run (2000 examples/test, ~10 min)
+- `uv run mutmut run "wh.metrics.<module>.*"` — mutation testing, staged per module (see docs/testing.md; compiler takes ~25 min)
+- `bash scripts/engine_matrix.sh` — metrics suite against pinned + latest DuckDB
 - `uv run wh validate` / `uv run wh mirror [--only <table>]` — CLI
 - Dev SQL Server: localhost,1433, database ExecReporting; password lives in
   `WH_WAREHOUSE_PWD` (ask the user; never write it into tracked files).

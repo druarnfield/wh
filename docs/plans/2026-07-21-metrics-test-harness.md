@@ -1445,7 +1445,7 @@ test or documented it as equivalent. The score is the standing answer to
 - Create: `scripts/engine_matrix.sh`
 - Modify: `docs/testing.md`, `CLAUDE.md`
 
-- [ ] **Step 1: Engine matrix script**
+- [x] **Step 1: Engine matrix script**
 
 ```bash
 #!/usr/bin/env bash
@@ -1464,7 +1464,7 @@ done
 pass (the second leg may legitimately fail on a future DuckDB — that's
 the script doing its job; note it rather than pinning around it).
 
-- [ ] **Step 2: Traceability table in `docs/testing.md`**
+- [x] **Step 2: Traceability table in `docs/testing.md`**
 
 Fill in the guarantee map — every documented guarantee names its tests:
 
@@ -1485,7 +1485,7 @@ Fill in the guarantee map — every documented guarantee names its tests:
 (Verify each row's test names against the actual suite while writing —
 the table is only defensible if grep confirms it.)
 
-- [ ] **Step 3: CLAUDE.md updates**
+- [x] **Step 3: CLAUDE.md updates**
 
 Add to Commands:
 - `HYPOTHESIS_PROFILE=deep uv run pytest tests/metrics -m fuzz` — deep generative run
@@ -1503,7 +1503,7 @@ Add to the metrics notes:
   (docs/plans/2026-07-21-metrics-test-harness.md) with the layers and
   where the mutation baseline lives.
 
-- [ ] **Step 4: Final gate and push**
+- [x] **Step 4: Final gate and push**
 
 ```bash
 set -o pipefail
