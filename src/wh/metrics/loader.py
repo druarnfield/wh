@@ -206,8 +206,14 @@ def _parse_model(fname, name, spec, shared_dims, fiscal_year_start) -> Model:
         )
     snapshot = bool(spec.get("snapshot", False))
 
+    raw_dims = spec.get("dimensions")
+    if raw_dims is not None and not isinstance(raw_dims, dict):
+        raise SemanticsError(
+            f"{fname}: model '{name}': 'dimensions:' must be a mapping of "
+            f"dim name to fact column or {{shared: <fact key column>}}"
+        )
     dims: dict[str, DimRef] = {}
-    for dname, v in (spec.get("dimensions") or {}).items():
+    for dname, v in (raw_dims or {}).items():
         _check_name(fname, "dimension", dname)
         if isinstance(v, dict):
             _reject_unknown(

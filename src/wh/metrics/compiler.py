@@ -147,6 +147,11 @@ def _lit(v) -> str:
         raise SemanticsError(
             f"context values must be scalars or dates — got {type(v).__name__} ({v!r})"
         )
+    if "\x00" in v:
+        # a quoted literal can't hold NUL (the parser stops dead), but DuckDB
+        # strings can — splice the byte back in with chr(0)
+        chunks = ["'" + c.replace("'", "''") + "'" for c in v.split("\x00")]
+        return "(" + " || chr(0) || ".join(chunks) + ")"
     return "'" + v.replace("'", "''") + "'"
 
 
