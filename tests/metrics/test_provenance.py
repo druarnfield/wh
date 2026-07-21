@@ -273,3 +273,26 @@ def test_model_hash_covers_config_not_measures(defs, make_defs, design_yaml):
     )["removals"]
     assert model_hash(fys1) != model_hash(fys9)
     assert re.fullmatch(r"[0-9a-f]{64}", model_hash(base))
+
+
+def test_provenance_describes_the_executed_frame_not_current_data(con, defs):
+    from wh.metrics.result import Slice
+
+    s = Slice(defs["waitlist"], ["patients_waiting"], grain="month",
+              con=lambda: con)
+    s.frame()
+    before = s.provenance().data["as_at"]["base"]
+    con.execute(
+        "INSERT INTO main.waitlist VALUES "
+        "(DATE '2026-07-17','C1','D1','Cat 1','U1',142,90)"
+    )
+    after = s.provenance().data["as_at"]["base"]
+    assert after == before          # captured at frame(), not re-derived
+
+
+def test_provenance_without_frame_reads_current_data(con, defs):
+    from wh.metrics.result import Slice
+
+    s = Slice(defs["waitlist"], ["patients_waiting"], grain="month",
+              con=lambda: con)
+    assert s.provenance().data["as_at"]["base"]   # still works, fresh gather
