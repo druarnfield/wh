@@ -259,7 +259,11 @@ Mechanics worth knowing:
 - On snapshot models, each comparison period is evaluated at **its own**
   as-at census; both moments appear in provenance.
 - `fytd` recomputes from base rows every time, so `count(DISTINCT ...)` fytd
-  is a true distinct count, not a sum of monthly distinct counts.
+  is a true distinct count, not a sum of monthly distinct counts. It is
+  FY-bounded via the *period start's* fiscal year, so a period straddling
+  the FY boundary (a calendar year or ISO week under a July start)
+  accumulates only its starting FY; a cell with no rows in that FY reads
+  NULL — the gap rule — not 0 (0 means rows existed but none matched).
 - `yoy` is invalid at `week` grain (a year shift misaligns week starts).
 
 ### `complete_periods=True`

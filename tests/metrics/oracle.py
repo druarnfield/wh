@@ -164,3 +164,112 @@ def assert_maps_equal(actual, expected, context=""):
                     f"{context} {gk}/{m}: compiled={av!r} oracle={ev!r}"
             else:
                 assert av == ev, f"{context} {gk}/{m}: compiled={av!r} oracle={ev!r}"
+
+
+# --- compare= (prior / yoy / fytd) ---
+
+import calendar
+
+
+def _months_back_naive(d, n):
+    y, m = divmod(d.year * 12 + d.month - 1 - n, 12)
+    return date(y, m + 1, min(d.day, calendar.monthrange(y, m + 1)[1]))
+
+
+_OFFSETS = {  # grain -> (months, days) for 'prior'; yoy is always (12, 0)
+    "day": (0, 1), "week": (0, 7), "month": (1, 0), "quarter": (3, 0),
+    "year": (12, 0), "fy": (12, 0), "fy_quarter": (3, 0),
+}
+
+
+def prev_period(p, cmp, grain):
+    months, days = (12, 0) if cmp == "yoy" else _OFFSETS[grain]
+    return _months_back_naive(p, months) if months else p - timedelta(days=days)
+
+
+def shift_window(win, cmp, grain):
+    """The documented rule, restated naively: shift the exclusive day
+    bound so period ends map to period ends; datetimes keep time-of-day."""
+    if win is None:
+        return None
+    months, days = (12, 0) if cmp == "yoy" else _OFFSETS[grain]
+    lo, hi = win
+
+    def back(x):
+        if months:
+            if isinstance(x, datetime):
+                d2 = _months_back_naive(x.date() + timedelta(days=1), months) \
+                     - timedelta(days=1)
+                x = datetime.combine(d2, x.time())
+            else:
+                x = _months_back_naive(x, months)
+        return x - timedelta(days=days) if days else x
+
+    def back_lo(x):
+        if months:
+            if isinstance(x, datetime):
+                x = datetime.combine(_months_back_naive(x.date(), months),
+                                     x.time())
+            else:
+                x = _months_back_naive(x, months)
+        return x - timedelta(days=days) if days else x
+
+    # hi is inclusive at the surface: shift it via its exclusive day
+    return (back_lo(lo), _shift_hi(hi, back))
+
+
+def _shift_hi(hi, back):
+    if isinstance(hi, datetime):
+        return back(hi)
+    return back(hi + timedelta(days=1)) - timedelta(days=1)
+
+
+def fy_of(d, fys):
+    d = _day(d)
+    return d.year if d.month >= fys else d.year - 1
+
+
+def compare_oracle(case, measures, by, ctx, win, grain, compare):
+    """base map + {measure}_{cmp} columns, per the documented semantics."""
+    base = slice_oracle(case, measures, by=by, ctx=ctx, win=win, grain=grain)
+    out = {gk: dict(vals) for gk, vals in base.items()}
+    for cmp in compare:
+        if cmp == "fytd":
+            cells = _fytd_cells(case, measures, by, ctx, win, grain, base)
+        else:
+            shifted = slice_oracle(case, measures, by=by, ctx=ctx,
+                                   win=shift_window(win, cmp, grain),
+                                   grain=grain)
+            cells = {
+                gk: shifted.get((prev_period(gk[0], cmp, grain),) + gk[1:])
+                for gk in base
+            }
+        for gk in out:
+            vals = cells.get(gk)
+            for m in measures:
+                out[gk][f"{m}_{cmp}"] = None if vals is None else vals[m]
+    return out
+
+
+def _fytd_cells(case, measures, by, ctx, win, grain, base):
+    """Recomputed from base rows: same FY, period <= P, hi-truncated,
+    same group. The window's LOW bound does not cut fytd. An EMPTY fytd
+    row set is a gap (None cell), not a zero — e.g. the FY-straddling
+    half of a calendar-year period under a July FY start; matches the
+    'gap periods stay NULL' join-miss rule."""
+    ctx = dict(ctx or {})
+    hi = win[1] if win else None
+    rows = [r for r in case.rows
+            if hi is None or in_window(r["d"], (date(1900, 1, 1), hi))]
+    for key, op in ctx.items():
+        rows = [r for r in rows if passes(_attr(case, r, key), op)]
+    cells = {}
+    for gk in base:
+        p = gk[0]
+        rs = [r for r in rows
+              if fy_of(r["d"], case.fys) == fy_of(p, case.fys)
+              and period_of(r["d"], grain, case.fys) <= p
+              and tuple(_attr(case, r, b) for b in by) == gk[1:]]
+        cells[gk] = {m: _agg(case.measures[m], rs)
+                     for m in measures} if rs else None
+    return cells
