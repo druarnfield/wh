@@ -99,3 +99,10 @@ def test_resolve_is_idempotent_and_plain_contexts_are_born_resolved():
     ctx = context(facility__region="North")
     assert ctx.is_resolved
     assert ctx.resolve(anchor=date(2026, 1, 1)).entries == ctx.entries
+
+
+def test_last_rejects_zero_and_negative_n():
+    with pytest.raises(SemanticsError, match="n >= 1"):
+        last(0, "day")
+    with pytest.raises(SemanticsError, match="n >= 1"):
+        last(-3, "month")

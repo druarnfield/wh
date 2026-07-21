@@ -62,7 +62,12 @@ def all_() -> All:
 def last(n: int, unit: str) -> LastPeriods:
     if unit not in _UNITS:
         raise SemanticsError(f"wh.last unit must be one of {', '.join(_UNITS)}")
-    return LastPeriods(int(n), unit)
+    n = int(n)
+    if n < 1:
+        raise SemanticsError(
+            "wh.last needs n >= 1 — zero or negative windows can only be empty"
+        )
+    return LastPeriods(n, unit)
 
 
 _OPS = (Eq, In, Not, Between, LastPeriods, All)
