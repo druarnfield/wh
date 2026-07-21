@@ -47,7 +47,7 @@ its green. Full-suite gate before every commit:
 - Modify: `.gitignore`
 - Create: `docs/testing.md`
 
-- [ ] **Step 1: Add dev dependencies and pytest marker config**
+- [x] **Step 1: Add dev dependencies and pytest marker config**
 
 Run: `uv add --dev hypothesis mutmut`
 
@@ -60,7 +60,7 @@ markers = [
 ]
 ```
 
-- [ ] **Step 2: Register Hypothesis profiles**
+- [x] **Step 2: Register Hypothesis profiles**
 
 Append to `tests/metrics/conftest.py`:
 
@@ -82,7 +82,7 @@ settings.load_profile(os.environ.get("HYPOTHESIS_PROFILE", "default"))
 
 Add `.hypothesis/` to `.gitignore`.
 
-- [ ] **Step 3: Create `docs/testing.md` skeleton**
+- [x] **Step 3: Create `docs/testing.md` skeleton**
 
 ```markdown
 # Testing the metrics layer — the trust contract
@@ -122,7 +122,7 @@ so that correctness is *demonstrated*, not just asserted:
 (recorded in Task 9)
 ```
 
-- [ ] **Step 4: Verify and commit**
+- [x] **Step 4: Verify and commit**
 
 Run: `set -o pipefail; uv run pytest -q` — count unchanged, no warnings
 about unknown markers.
@@ -146,7 +146,7 @@ covered without paying file IO per example.
 - Create: `tests/metrics/strategies.py`
 - Test: `tests/metrics/test_strategies.py`
 
-- [ ] **Step 1: Write `tests/metrics/strategies.py`**
+- [x] **Step 1: Write `tests/metrics/strategies.py`**
 
 ```python
 """Generative vocabulary: semantic specs both sides can interpret.
@@ -401,7 +401,7 @@ def to_wh_context(args: SliceArgs):
     return Context(entries)
 ```
 
-- [ ] **Step 2: Write the generator self-tests**
+- [x] **Step 2: Write the generator self-tests**
 
 Create `tests/metrics/test_strategies.py`:
 
@@ -442,13 +442,13 @@ Note: `Model`/`Measure` are frozen dataclasses so `==` is fieldwise; if
 the fidelity assert fails on a benign default (e.g. `description`), make
 `render_yaml`/`build_model` agree rather than weakening the assert.
 
-- [ ] **Step 3: Run, fix generator bugs until green**
+- [x] **Step 3: Run, fix generator bugs until green**
 
 Run: `uv run pytest tests/metrics/test_strategies.py -q`
 Expected: PASS. Shrunken counterexamples here are generator bugs — fix in
 `strategies.py`, never by loosening the test.
 
-- [ ] **Step 4: Full suite gate and commit**
+- [x] **Step 4: Full suite gate and commit**
 
 ```bash
 set -o pipefail; uv run pytest -q
@@ -468,7 +468,7 @@ keeping the loader in the differential loop without per-example file IO."
 - Create: `tests/metrics/oracle.py`
 - Test: `tests/metrics/test_oracle.py`
 
-- [ ] **Step 1: Write `tests/metrics/oracle.py` (plain slices)**
+- [x] **Step 1: Write `tests/metrics/oracle.py` (plain slices)**
 
 ```python
 """The boring oracle: a deliberately naive interpreter of the documented
@@ -636,7 +636,7 @@ def assert_maps_equal(actual, expected, context=""):
                 assert av == ev, f"{context} {gk}/{m}: compiled={av!r} oracle={ev!r}"
 ```
 
-- [ ] **Step 2: Comparator + oracle self-tests**
+- [x] **Step 2: Comparator + oracle self-tests**
 
 Create `tests/metrics/test_oracle.py`:
 
@@ -683,7 +683,7 @@ def test_oracle_windows_are_day_inclusive():
     assert not in_window(date(2026, 7, 1), (date(2026, 6, 1), date(2026, 6, 30)))
 ```
 
-- [ ] **Step 3: Run, then commit**
+- [x] **Step 3: Run, then commit**
 
 Run: `uv run pytest tests/metrics/test_oracle.py -v` — all pass.
 
