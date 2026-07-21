@@ -1385,7 +1385,7 @@ must compile to parseable SQL with exactly the declared output columns."
 - Modify: `docs/testing.md`
 - Possibly new tests for surviving mutants
 
-- [ ] **Step 1: Configure mutmut**
+- [x] **Step 1: Configure mutmut**
 
 Add to `pyproject.toml` (adjust to the installed mutmut major version —
 verify with `uv run mutmut --help` and its docs before trusting the shape):
@@ -1401,12 +1401,12 @@ their own layers): the run command is
 `uv run mutmut run` with the pytest invocation configured (or defaulted)
 to `python -m pytest -x -q tests/metrics -m "not fuzz"`.
 
-- [ ] **Step 2: Baseline the small modules first**
+- [x] **Step 2: Baseline the small modules first**
 
 Run mutation on `timegrain.py` and `context_ops.py` (fast: small files,
 6s suite). Record per-module: mutants generated / killed / survived.
 
-- [ ] **Step 3: Run `compiler.py` in the background**
+- [x] **Step 3: Run `compiler.py` in the background**
 
 This is hours of wall-clock (hundreds of mutants × the suite). Start it
 in the background and continue; collect results when done.
