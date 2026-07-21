@@ -409,6 +409,25 @@ def compile_slice(
             )
     _check_compare(model, measures, compare, grain)
 
+    # one namespace: every output column named exactly once. by= aliases
+    # come from _by_item (which also validates the entries), generated
+    # comparison columns are {measure}_{cmp}
+    out_cols = ["period"] if grain is not None else []
+    for entry in by:
+        item, _dim = _by_item(model, entry)
+        out_cols.append(item.rsplit(" AS ", 1)[1].strip('"'))
+    out_cols += list(measures)
+    out_cols += [f"{m}_{c}" for m in measures for c in compare]
+    seen: set[str] = set()
+    for col in out_cols:
+        low = col.lower()
+        if low in seen:
+            raise SemanticsError(
+                f"output column '{col}' would be produced twice — rename a "
+                f"measure or dimension, or drop the duplicate entry"
+            )
+        seen.add(low)
+
     time_op, ctx_attrs, applied, ignored = split_context(model, ctx)
     lines, group_aliases, has_ratio = _inner_lines(
         model, measures, by, ctx_attrs, time_op, grain, cell_n=suppress is not None

@@ -321,3 +321,16 @@ census:
   measures:
     beds: {description: beds, expr: "max(beds)", time_agg: avg}
 """)
+
+
+def test_dim_and_measure_sharing_a_name_is_a_load_error(make_defs):
+    with pytest.raises(SemanticsError, match="both"):
+        make_defs("""\
+events:
+  fact: main.events
+  time: {column: d}
+  dimensions:
+    n: category
+  measures:
+    n: {description: n, expr: "count(*)"}
+""")

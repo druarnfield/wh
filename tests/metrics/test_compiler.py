@@ -213,3 +213,30 @@ def test_unresolved_context_is_refused(defs):
 
     with pytest.raises(SemanticsError, match="resolve"):
         compile_slice(defs["removals"], ["removals"], ctx=context(doctor__specialty=W()))
+
+
+def test_duplicate_output_columns_error(defs):
+    with pytest.raises(SemanticsError, match="produced twice"):
+        compile_slice(defs["removals"], ["removals", "removals"])
+    with pytest.raises(SemanticsError, match="produced twice"):
+        compile_slice(
+            defs["removals"], ["removals"],
+            by=["facility.region", "facility.region"],
+        )
+
+
+def test_by_entry_colliding_with_comparison_column_errors(make_defs):
+    defs = make_defs("""\
+events:
+  fact: main.events
+  time: {column: d}
+  dimensions:
+    n_prior: category
+  measures:
+    n: {description: n, expr: "count(*)"}
+""")
+    with pytest.raises(SemanticsError, match="n_prior"):
+        compile_slice(
+            defs["events"], ["n"], by=["n_prior"], grain="month",
+            compare=["prior"],
+        )

@@ -251,6 +251,13 @@ def _parse_model(fname, name, spec, shared_dims, fiscal_year_start) -> Model:
         mname: _parse_measure(fname, name, mname, m, snapshot)
         for mname, m in raw_measures.items()
     }
+    overlap = dims.keys() & measures.keys()
+    if overlap:
+        raise SemanticsError(
+            f"{fname}: model '{name}': {', '.join(sorted(overlap))} named as "
+            f"both a dimension and a measure — every output column needs one "
+            f"meaning; rename one of them"
+        )
 
     return Model(
         name=name, fact=spec["fact"], description=str(spec.get("description", "")),
