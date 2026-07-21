@@ -20,13 +20,15 @@ def bind_checks(con, model: Model) -> list[str]:
     _check_measures_aggregate(con, model)
     _explain_representative_query(con, model)
     warnings: list[str] = []
-    seen_tables = set()
+    seen_keys: set[tuple] = set()
     for dname, ref in model.dims.items():
         dim = ref.shared
         if dim is None:
             continue
-        if dim.table not in seen_tables:
-            seen_tables.add(dim.table)
+        # role-playing dims reuse a table through DIFFERENT key columns —
+        # each (table, key) pair needs its own uniqueness check
+        if (dim.table, dim.key_column) not in seen_keys:
+            seen_keys.add((dim.table, dim.key_column))
             _check_dim_key_unique(con, dim)
         w = _orphan_warning(con, model, dname, ref)
         if w:
