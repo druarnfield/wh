@@ -88,7 +88,7 @@ def test_time_context_is_day_inclusive_on_both_ends(con, defs):
         SELECT count(*) FILTER (WHERE removal_reason <> 'ADMIN') AS removals
         FROM main.waitlist_removals AS fact
         WHERE fact.removal_date >= DATE '2025-07-01'
-          AND fact.removal_date < DATE '2026-06-30' + INTERVAL 1 DAY
+          AND fact.removal_date < DATE '2026-07-01'
         GROUP BY ALL
     """)
 
@@ -148,13 +148,13 @@ def test_snapshot_asat_join_shape(con, defs):
                    max(snapshot_date) AS __as_at
             FROM main.waitlist
             WHERE snapshot_date >= DATE '2026-06-01'
-              AND snapshot_date < DATE '2026-06-30' + INTERVAL 1 DAY
+              AND snapshot_date < DATE '2026-07-01'
             GROUP BY 1
         ) AS __asat
           ON CAST(date_trunc('month', fact.snapshot_date) AS DATE) = __asat.__period
          AND fact.snapshot_date = __asat.__as_at
         WHERE fact.snapshot_date >= DATE '2026-06-01'
-          AND fact.snapshot_date < DATE '2026-06-30' + INTERVAL 1 DAY
+          AND fact.snapshot_date < DATE '2026-07-01'
         GROUP BY ALL
         ORDER BY period
     """)

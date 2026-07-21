@@ -31,7 +31,7 @@ def test_scoped_values_go_through_the_lanes(con, defs):
         LEFT JOIN main.clinic_dim AS facility
                ON fact.clinic_code = facility.clinic_code
         WHERE fact.snapshot_date >= DATE '2026-06-01'
-          AND fact.snapshot_date < DATE '2026-06-30' + INTERVAL 1 DAY
+          AND fact.snapshot_date < DATE '2026-07-01'
           AND facility.region = 'North'
           AND facility.clinic_name IS NOT NULL
         ORDER BY 1

@@ -29,6 +29,30 @@ class Compiled:
     asat_queries: dict | None = None   # lane -> as-at subquery (snapshot models)
 
 
+@dataclass(frozen=True)
+class TimeWindow:
+    """Compiler-internal time lane: [lo, hi_exc) — lo inclusive instant,
+    hi_exc exclusive. The surface Between (inclusive both ends, what
+    contexts hash and serialise) converts here exactly once; every
+    consumer does half-open arithmetic and no bound ever needs a
+    day-clamp special case again."""
+    lo: object
+    hi_exc: object
+
+
+def _to_window(op):
+    if not isinstance(op, Between):
+        return op
+    # a date hi means "the whole day"; a datetime hi means "up to this
+    # instant" (DuckDB timestamps are microsecond precision, so +1us is
+    # the exact exclusive bound)
+    hi_exc = (
+        op.hi + timedelta(microseconds=1) if isinstance(op.hi, datetime)
+        else op.hi + timedelta(days=1)
+    )
+    return TimeWindow(op.lo, hi_exc)
+
+
 COMPARES = ("prior", "yoy", "fytd")
 
 _PRIOR_OFFSET = {   # (months, days) one grain-period back
@@ -48,19 +72,29 @@ def _shift_back(v, months: int, days: int):
     return v - timedelta(days=days) if days else v
 
 
-def _shift_op(op, months: int, days: int):
-    if not isinstance(op, Between):
+def _shift_exc(t, months: int, days: int):
+    """Shift an EXCLUSIVE bound. Date bounds sit on period starts and
+    shift without clamping — Jul 1 minus a month is Jun 1, so period ends
+    map to period ends (Feb 28 - 1 year lands on Feb 29 in a leap year).
+    A datetime keeps its time-of-day while its (inclusive) day shifts
+    through the same exclusive-day arithmetic — Jun 30 23:59:59 maps to
+    May 31 23:59:59, never day-clamped May 30, which would silently drop
+    end-of-month rows from every comparison."""
+    if months:
+        if isinstance(t, datetime):
+            day = _months_back(t.date() + timedelta(days=1), months) - timedelta(days=1)
+            t = datetime.combine(day, t.time())
+        else:
+            t = _months_back(t, months)
+    return t - timedelta(days=days) if days else t
+
+
+def _shift_window(op, months: int, days: int):
+    if not isinstance(op, TimeWindow):
         return op
-    lo = _shift_back(op.lo, months, days)
-    if isinstance(op.hi, datetime):
-        hi = _shift_back(op.hi, months, days)
-    else:
-        # shift the EXCLUSIVE bound so period ends map to period ends:
-        # Jun 30 - 1 month must be May 31, and Feb 28 - 1 year must be
-        # Feb 29 in a leap year — day-clamping the inclusive bound would
-        # silently drop end-of-month rows from every comparison
-        hi = _shift_back(op.hi + timedelta(days=1), months, days) - timedelta(days=1)
-    return Between(lo, hi)
+    return TimeWindow(
+        _shift_back(op.lo, months, days), _shift_exc(op.hi_exc, months, days)
+    )
 
 
 def _check_compare(model: Model, measures, compare, grain) -> None:
@@ -133,18 +167,14 @@ def _predicate(lhs: str, op) -> str | None:
 
 
 def _time_predicate(lhs: str, op) -> str | None:
-    """Time ranges are day-inclusive on both ends. Plain-date bounds compile
-    as `>= lo AND < hi + 1 day` so a TIMESTAMP time column keeps the whole
-    end day (BETWEEN ... DATE 'hi' would cut at midnight and, on snapshot
-    models, silently move the as-at moment). Datetime bounds are exact."""
-    if not isinstance(op, Between):
+    """Half-open: >= lo AND < hi_exc. Day-inclusive date bounds and exact
+    datetime bounds were both normalised into hi_exc by _to_window, so a
+    TIMESTAMP time column keeps the whole end day (BETWEEN ... DATE 'hi'
+    would cut at midnight and, on snapshot models, silently move the
+    as-at moment)."""
+    if not isinstance(op, TimeWindow):
         return _predicate(lhs, op)
-    hi = (
-        f"{lhs} <= {_lit(op.hi)}"
-        if isinstance(op.hi, datetime)
-        else f"{lhs} < {_lit(op.hi)} + INTERVAL 1 DAY"
-    )
-    return f"{lhs} >= {_lit(op.lo)} AND {hi}"
+    return f"{lhs} >= {_lit(op.lo)} AND {lhs} < {_lit(op.hi_exc)}"
 
 
 def _declared_surface(model: Model) -> str:
@@ -169,7 +199,7 @@ def split_context(model: Model, ctx: Context):
     time_op, attrs, applied, ignored = None, [], [], []
     for key, op in ctx.entries.items():
         if key == "time":
-            time_op = op
+            time_op = _to_window(op)
             applied.append(key)
             continue
         dname, _, attr = key.partition("__")
@@ -380,8 +410,8 @@ def _complete_predicate(model: Model, grain: str, period_ref: str, time_op=None)
         )
     else:
         cond = f"{period_end} <= (SELECT max({tc}) FROM {model.fact})"
-    if isinstance(time_op, Between):
-        cond += f" AND {period_end} <= {_lit(time_op.hi)}"
+    if isinstance(time_op, TimeWindow):
+        cond += f" AND {period_end} < {_lit(time_op.hi_exc)}"
     return cond
 
 
@@ -482,13 +512,8 @@ def _fytd_lines(model, measures, by, ctx_attrs, time_op, grain, group_aliases,
 
     predicates: list[str] = []
     joined: set[str] = set()
-    if isinstance(time_op, Between):     # mid-period truncation carries in
-        hi = (
-            f"{tc} <= {_lit(time_op.hi)}"
-            if isinstance(time_op.hi, datetime)
-            else f"{tc} < {_lit(time_op.hi)} + INTERVAL 1 DAY"
-        )
-        predicates.append(hi)
+    if isinstance(time_op, TimeWindow):  # mid-period truncation carries in
+        predicates.append(f"{tc} < {_lit(time_op.hi_exc)}")
     for _key, lhs, op in ctx_attrs:
         p = _predicate(lhs, op)
         if p:
@@ -549,18 +574,18 @@ def _assemble_compare(
                 model, measures, by, ctx_attrs, time_op, grain, group_aliases,
                 cell_n=suppress is not None,
             )
-            if isinstance(time_op, Between):   # unbounded fytd is still FY-bounded
+            if isinstance(time_op, TimeWindow):  # unbounded fytd is still FY-bounded
                 scan_lo[cmp] = fy_start(time_op.lo, model.fiscal_year_start)
             conds = [f"{name}.period = b.period"]
             ctes.append((name, cte_lines))
         else:
             months, days = _compare_offset(cmp, grain)
-            shifted = _shift_op(time_op, months, days)
+            shifted = _shift_window(time_op, months, days)
             cte_lines, _, _ = _inner_lines(
                 model, measures, by, ctx_attrs, shifted, grain,
                 cell_n=suppress is not None,
             )
-            scan_lo[cmp] = shifted.lo if isinstance(shifted, Between) else None
+            scan_lo[cmp] = shifted.lo if isinstance(shifted, TimeWindow) else None
             if asat is not None:
                 asat[cmp] = _asat_subquery(model, grain, shifted)
             shift = f"INTERVAL {months} MONTH" if months else f"INTERVAL {days} DAY"
