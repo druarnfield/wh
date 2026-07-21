@@ -1125,7 +1125,7 @@ defend against shared misreadings that differential testing cannot see."
 - Modify: `tests/metrics/oracle.py`
 - Modify: `tests/metrics/test_differential.py`
 
-- [ ] **Step 1: Extend the oracle**
+- [x] **Step 1: Extend the oracle**
 
 Append to `oracle.py`:
 
@@ -1209,7 +1209,7 @@ with a per-measure den count then. A missing prior period (join miss) is
 NULL for both count and value reasons — `n is None` covers it and the
 value was already None, so both implementations agree on that cell.
 
-- [ ] **Step 2: Add the differential test**
+- [x] **Step 2: Add the differential test**
 
 Append to `test_differential.py`:
 
@@ -1240,7 +1240,7 @@ suppress note actually documents which lane's count governs a comparison
 column — if it's silent, that ambiguity is itself a finding: fix the doc
 in the same commit as whichever side changes.
 
-- [ ] **Step 3: Run default + deep, resolve, commit**
+- [x] **Step 3: Run default + deep, resolve, commit**
 
 ```bash
 set -o pipefail; uv run pytest -q
@@ -1259,7 +1259,7 @@ cell-exact, including which lane's cell count governs comparison columns."
 **Files:**
 - Create: `tests/metrics/test_fuzz_loader.py`
 
-- [ ] **Step 1: Write the fuzz tests**
+- [x] **Step 1: Write the fuzz tests**
 
 ```python
 """The loader is the firewall: every input either loads to Models or
@@ -1361,7 +1361,7 @@ def test_context_values_never_break_the_generated_sql(value):
     assert res.fetchall() == [(1,)]
 ```
 
-- [ ] **Step 2: Run default + deep, fix findings, commit**
+- [x] **Step 2: Run default + deep, fix findings, commit**
 
 Any non-`SemanticsError` exception out of the loader is a real finding —
 fix it in `loader.py` (wrap or check), don't catch it in the test.
