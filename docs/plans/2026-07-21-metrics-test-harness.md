@@ -704,7 +704,7 @@ planted wrong value, wrong group set, or NULL-vs-zero is detected."
 **Files:**
 - Create: `tests/metrics/test_differential.py`
 
-- [ ] **Step 1: Write the differential test + the harness-bites meta-test**
+- [x] **Step 1: Write the differential test + the harness-bites meta-test**
 
 ```python
 """Differential: compiled SQL vs the naive oracle, cell-exact, over
@@ -776,7 +776,7 @@ def test_the_harness_bites():
         assert_maps_equal(actual, expected)
 ```
 
-- [ ] **Step 2: Run at default budget, then one deep shakeout**
+- [x] **Step 2: Run at default budget, then one deep shakeout**
 
 Run: `uv run pytest tests/metrics/test_differential.py -q`
 Then: `HYPOTHESIS_PROFILE=deep uv run pytest tests/metrics/test_differential.py -q`
@@ -786,7 +786,7 @@ shrunken example decides. Diagnose against the documented contract in
 `docs/metrics.md`; fix whichever side disagrees with the *doc*. If the doc
 itself is ambiguous, that's a finding: clarify the doc in the same commit.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 set -o pipefail; uv run pytest -q
@@ -807,7 +807,7 @@ SQL and proves the harness catches it."
 - Modify: `tests/metrics/oracle.py`
 - Modify: `tests/metrics/test_differential.py`
 
-- [ ] **Step 1: Extend the oracle**
+- [x] **Step 1: Extend the oracle**
 
 Append to `oracle.py`:
 
@@ -915,7 +915,7 @@ def _fytd_cells(case, measures, by, ctx, win, grain, base):
     return cells
 ```
 
-- [ ] **Step 2: Add the differential test**
+- [x] **Step 2: Add the differential test**
 
 Append to `test_differential.py`:
 
@@ -933,7 +933,7 @@ def test_compare_slices_match_the_oracle(sc):
     assert_maps_equal(actual, expected)
 ```
 
-- [ ] **Step 3: Run default + deep shakeout, then commit**
+- [x] **Step 3: Run default + deep shakeout, then commit**
 
 Run: `uv run pytest tests/metrics/test_differential.py -q`, then
 `HYPOTHESIS_PROFILE=deep uv run pytest tests/metrics/test_differential.py -q`.
@@ -963,7 +963,7 @@ could share a wrong reading of the spec; these relations hold regardless).
 **Files:**
 - Create: `tests/metrics/test_properties.py`
 
-- [ ] **Step 1: Write the property tests**
+- [x] **Step 1: Write the property tests**
 
 ```python
 """Metamorphic relations between the compiler's own answers. These hold
@@ -1103,7 +1103,7 @@ def test_prior_equals_the_direct_value_of_the_previous_period(sc):
                 assert vals[f"{m}_{cmp}"] == direct, (gk, m, cmp)
 ```
 
-- [ ] **Step 2: Run default + deep, then commit**
+- [x] **Step 2: Run default + deep, then commit**
 
 Run: `uv run pytest tests/metrics/test_properties.py -q` then a deep pass.
 
