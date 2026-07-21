@@ -240,3 +240,26 @@ events:
             defs["events"], ["n"], by=["n_prior"], grain="month",
             compare=["prior"],
         )
+
+
+def test_reserved_word_names_compile_and_execute(con, make_defs):
+    """Aliases parse unquoted, but the ratio/suppress wrapper REFERENCES
+    them bare in its outer select — where keywords like select/union are
+    parser errors unless quoted."""
+    defs = make_defs("""\
+events:
+  fact: main.waitlist_removals
+  time: {column: removal_date}
+  dimensions:
+    union: removal_reason
+  measures:
+    select: {description: n, expr: "count(*)"}
+    pct:
+      description: p
+      ratio: {num: "count(*)", den: "count(*)"}
+""")
+    c = compile_slice(defs["events"], ["select", "pct"], by=["union"], grain="month")
+    res = con.execute(c.sql)
+    cols = [d[0] for d in res.description]
+    assert "select" in cols and "union" in cols and "pct" in cols
+    assert res.fetchall()

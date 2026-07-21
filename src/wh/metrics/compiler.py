@@ -256,7 +256,7 @@ def _by_item(model: Model, entry: str) -> tuple[str, str | None]:
                 f"local dimension '{dname}' has no attributes — use plain "
                 f"'{dname}' in by="
             )
-        return f"fact.{ref.fact_column} AS {dname}", None
+        return f'fact.{ref.fact_column} AS "{dname}"', None
     if not attr:
         raise SemanticsError(
             f"by= entry '{dname}' needs an attribute, e.g. "
@@ -329,10 +329,10 @@ def _inner_lines(model, measures, by, ctx_attrs, time_op, grain, cell_n=False):
         m = model.measures[name]
         if m.ratio:
             has_ratio = True
-            select.append(f"{m.ratio[0]} AS __{name}_num")
-            select.append(f"{m.ratio[1]} AS __{name}_den")
+            select.append(f'{m.ratio[0]} AS "__{name}_num"')
+            select.append(f'{m.ratio[1]} AS "__{name}_den"')
         else:
-            select.append(f"{_measure_sql(m)} AS {name}")
+            select.append(f'{_measure_sql(m)} AS "{name}"')
     if cell_n:
         select.append("count(*) AS __cell_n")
 
@@ -370,20 +370,21 @@ def _sel(prefix: str, name: str, m, alias: str | None = None,
     cells under n rows go NULL — and a ratio also nulls when its own
     denominator is under n (a big cell can hide a tiny denominator)."""
     p = f"{prefix}." if prefix else ""
+    a = f'"{alias or name}"'
     if m.ratio:
-        e = f"CAST({p}__{name}_num AS DOUBLE) / NULLIF({p}__{name}_den, 0)"
+        e = f'CAST({p}"__{name}_num" AS DOUBLE) / NULLIF({p}"__{name}_den", 0)'
         if suppress is not None:
             e = (
-                f"CASE WHEN {p}__cell_n < {suppress} "
-                f"OR {p}__{name}_den < {suppress} THEN NULL ELSE {e} END"
+                f'CASE WHEN {p}__cell_n < {suppress} '
+                f'OR {p}"__{name}_den" < {suppress} THEN NULL ELSE {e} END'
             )
-        return f"{e} AS {alias or name}"
+        return f"{e} AS {a}"
     if suppress is not None:
         return (
-            f"CASE WHEN {p}__cell_n < {suppress} THEN NULL ELSE {p}{name} END "
-            f"AS {alias or name}"
+            f'CASE WHEN {p}__cell_n < {suppress} THEN NULL ELSE {p}"{name}" END '
+            f"AS {a}"
         )
-    return f"{p}{name}" + (f" AS {alias}" if alias else "")
+    return f'{p}"{name}"' + (f" AS {a}" if alias else "")
 
 
 def _indent(lines: list[str]) -> str:
@@ -503,10 +504,10 @@ def _fytd_lines(model, measures, by, ctx_attrs, time_op, grain, group_aliases,
     for name in measures:
         m = model.measures[name]
         if m.ratio:
-            sel.append(f"{m.ratio[0]} AS __{name}_num")
-            sel.append(f"{m.ratio[1]} AS __{name}_den")
+            sel.append(f'{m.ratio[0]} AS "__{name}_num"')
+            sel.append(f'{m.ratio[1]} AS "__{name}_den"')
         else:
-            sel.append(f"{_measure_sql(m)} AS {name}")
+            sel.append(f'{_measure_sql(m)} AS "{name}"')
     if cell_n:
         sel.append("count(*) AS __cell_n")
 
