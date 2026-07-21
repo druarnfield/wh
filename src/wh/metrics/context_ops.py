@@ -12,7 +12,7 @@ from __future__ import annotations
 import calendar
 import math
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 from ..errors import SemanticsError
 
@@ -185,7 +185,12 @@ class Context:
 
     def resolve(self, anchor: date) -> Context:
         """Plain-data snapshot: widgets read now, relative time anchored to
-        `anchor` (the fact's max date — same context + same mirror = same rows)."""
+        `anchor` (the fact's max DATE — same context + same mirror = same
+        rows). A datetime anchor floors to its date so every unit gets
+        whole-day windows; day-inclusive compilation keeps the anchor day."""
+        anchor = _as_date(anchor)
+        if isinstance(anchor, datetime):   # BEFORE date — datetime is a date subclass
+            anchor = anchor.date()
         out = {}
         for k, v in self._entries.items():
             if not isinstance(v, _OPS):              # widget
@@ -197,7 +202,6 @@ class Context:
                         f"'{k}': widget .value resolved to another widget"
                     )
             if isinstance(v, LastPeriods):
-                anchor = _as_date(anchor)
                 if v.unit == "day":
                     lo = anchor - timedelta(days=v.n - 1)
                 elif v.unit == "week":

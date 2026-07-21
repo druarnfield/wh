@@ -106,3 +106,14 @@ def test_last_rejects_zero_and_negative_n():
         last(0, "day")
     with pytest.raises(SemanticsError, match="n >= 1"):
         last(-3, "month")
+
+
+def test_datetime_anchor_floors_to_its_date():
+    from datetime import datetime
+
+    c = context(time=last(7, "day"))
+    r = c.resolve(anchor=datetime(2026, 7, 15, 9, 30)).entries["time"]
+    assert r == Between(date(2026, 7, 9), date(2026, 7, 15))
+    c = context(time=last(1, "month"))
+    r = c.resolve(anchor=datetime(2026, 7, 15, 9, 30)).entries["time"]
+    assert r == Between(date(2026, 6, 16), date(2026, 7, 15))
