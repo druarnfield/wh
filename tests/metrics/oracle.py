@@ -273,3 +273,79 @@ def _fytd_cells(case, measures, by, ctx, win, grain, base):
         cells[gk] = {m: _agg(case.measures[m], rs)
                      for m in measures} if rs else None
     return cells
+
+
+# --- suppress= and complete_periods ---
+
+def _cell_counts(case, by, ctx, win, grain):
+    """Row count per cell — the count aggregate over the same lanes.
+    The generator always includes the 'n' count spec."""
+    assert case.measures["n"][0] == "count"
+    return {gk: v["n"] for gk, v in
+            slice_oracle(case, ("n",), by=by, ctx=ctx, win=win,
+                         grain=grain).items()}
+
+
+def apply_suppress(case, measures, by, ctx, win, grain, compare, result, k):
+    """Cells under k rows go NULL — and each COMPARISON column is
+    suppressed by its OWN lane's cell count (the shifted window's rows /
+    the fytd cumulative rows), mirroring the compiler's per-CTE __cell_n.
+    For the generated ratio spec the den is count(*) == the cell count,
+    so the ratio's den<k rule coincides with the cell rule."""
+    base_n = _cell_counts(case, by, ctx, win, grain)
+    lane_n = {}
+    for cmp in compare:
+        if cmp == "fytd":
+            base_map = slice_oracle(case, ("n",), by=by, ctx=ctx, win=win,
+                                    grain=grain)
+            lane_n[cmp] = {gk: None if v is None else v["n"]
+                           for gk, v in _fytd_cells(
+                case, ("n",), by, ctx, win, grain, base_map).items()}
+        else:
+            shifted_n = _cell_counts(case, by, ctx,
+                                     shift_window(win, cmp, grain), grain)
+            lane_n[cmp] = {
+                gk: shifted_n.get((prev_period(gk[0], cmp, grain),) + gk[1:])
+                for gk in result
+            }
+    out = {}
+    for gk, vals in result.items():
+        out[gk] = {}
+        for col, v in vals.items():
+            cmp = next((c for c in compare if col.endswith(f"_{c}")), None)
+            n = lane_n[cmp].get(gk) if cmp else base_n.get(gk, 0)
+            out[gk][col] = None if (n is None or n < k) else v
+    return out
+
+
+def period_end_naive(p, grain):
+    if grain == "day":
+        return p
+    if grain == "week":
+        return p + timedelta(days=6)
+    months = {"month": 1, "quarter": 3, "year": 12, "fy": 12, "fy_quarter": 3}[grain]
+    y, m = divmod(p.year * 12 + p.month - 1 + months, 12)
+    return date(y, m + 1, 1) - timedelta(days=1)
+
+
+def complete_filter(case, result, grain, win):
+    """Max-date rule (event models / no cadence): period end within data.
+    Snapshot+cadence: final expected snapshot landed. Context-truncated
+    periods are incomplete."""
+    data_max = max(_day(r["d"]) for r in case.rows) if case.rows else None
+    hi = _day(win[1]) if win else None
+    out = {}
+    for gk, vals in result.items():
+        p = gk[0]
+        pe = period_end_naive(p, grain)
+        if case.snapshot and case.cadence == "weekly":
+            in_p = [_day(r["d"]) for r in case.rows
+                    if period_of(r["d"], grain, case.fys) == p]
+            ok = bool(in_p) and max(in_p) > pe - timedelta(days=7)
+        else:
+            ok = data_max is not None and pe <= data_max
+        if ok and hi is not None:
+            ok = pe <= hi
+        if ok:
+            out[gk] = vals
+    return out

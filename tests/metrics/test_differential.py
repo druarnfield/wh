@@ -8,7 +8,8 @@ from hypothesis import given, note
 
 from wh.metrics.compiler import compile_slice
 
-from oracle import assert_maps_equal, compare_oracle, result_map, slice_oracle
+from oracle import (apply_suppress, assert_maps_equal, compare_oracle,
+                    complete_filter, result_map, slice_oracle)
 from strategies import build_model, scenarios, seed, to_wh_context
 
 
@@ -47,6 +48,22 @@ def test_compare_slices_match_the_oracle(sc):
     actual, _ = run_both(case, args)
     expected = compare_oracle(case, args.measures, args.by, args.ctx,
                               args.time, args.grain, args.compare)
+    assert_maps_equal(actual, expected)
+
+
+@pytest.mark.fuzz
+@given(sc=scenarios(with_compare=True, with_suppress=True, with_complete=True))
+def test_suppress_and_complete_periods_match_the_oracle(sc):
+    case, args = sc
+    actual, _ = run_both(case, args)
+    expected = compare_oracle(case, args.measures, args.by, args.ctx,
+                              args.time, args.grain, args.compare)
+    if args.complete_periods:
+        expected = complete_filter(case, expected, args.grain, args.time)
+    if args.suppress is not None:
+        expected = apply_suppress(case, args.measures, args.by, args.ctx,
+                                  args.time, args.grain, args.compare,
+                                  expected, args.suppress)
     assert_maps_equal(actual, expected)
 
 
