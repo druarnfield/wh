@@ -67,6 +67,34 @@ def _column_refs(con, sql: str, described: str) -> list[list[str]]:
     return refs
 
 
+def _table_refs(con, sql: str, described: str) -> list[tuple[str, str]]:
+    """(schema, table) for every BASE_TABLE node in the parse tree —
+    empty schema when the reference is unqualified."""
+    (raw,) = con.execute("SELECT json_serialize_sql(?)", [sql]).fetchone()
+    tree = json.loads(raw)
+    if tree.get("error"):
+        raise SemanticsError(
+            f"unparseable {described}: {tree.get('error_message')}"
+        )
+    refs: list[tuple[str, str]] = []
+
+    def walk(node):
+        if isinstance(node, dict):
+            if node.get("type") == "BASE_TABLE":
+                refs.append(
+                    (node.get("schema_name", "").lower(),
+                     node.get("table_name", "").lower())
+                )
+            for v in node.values():
+                walk(v)
+        elif isinstance(node, list):
+            for x in node:
+                walk(x)
+
+    walk(tree)
+    return refs
+
+
 def _measure_parts(m) -> list[tuple[str, str, str]]:
     """(label, sql fragment, wrapping query) per definition piece."""
     parts = []
@@ -85,15 +113,28 @@ def _check_fact_only_refs(con, model: Model) -> None:
     depending on a type-1 attribute would mutate under a stable hash.
     Applies to exprs and ratio parts as much as to intrinsic predicates."""
     cols = _fact_columns(con, model)
+    parts = model.fact.lower().split(".")
+    fschema = parts[-2] if len(parts) > 1 else ""
+    ftable = parts[-1]
     for m in model.measures.values():
         for label, fragment, template in _measure_parts(m):
             sql = template.format(fact=model.fact, x=fragment)
-            for ref in _column_refs(con, sql, f"{label} of measure '{m.name}'"):
+            described = f"{label} of measure '{m.name}'"
+            for ref in _column_refs(con, sql, described):
                 if len(ref) > 1 or ref[0].lower() not in cols:
                     raise SemanticsError(
                         f"model '{model.name}': measure '{m.name}': {label} may "
                         f"reference fact columns only — '{'.'.join(ref)}' is "
                         f"not a column of {model.fact}"
+                    )
+            # a subquery on another table would make the definition depend
+            # on state outside the fact under a stable hash
+            for schema, table in _table_refs(con, sql, described):
+                if table != ftable or (schema and schema != fschema):
+                    raise SemanticsError(
+                        f"model '{model.name}': measure '{m.name}': {label} may "
+                        f"read the fact table only — it references "
+                        f"'{schema + '.' if schema else ''}{table}'"
                     )
 
 

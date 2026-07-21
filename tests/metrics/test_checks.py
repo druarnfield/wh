@@ -114,3 +114,30 @@ def test_roleplaying_dims_check_each_key_column(con, make_defs):
     )
     with pytest.raises(SemanticsError, match="code_b"):
         bind_checks(con, defs["roleplay"])
+
+
+def test_measure_subquery_on_another_table_is_rejected(con, make_defs):
+    defs = make_defs("""\
+events:
+  fact: main.waitlist_removals
+  time: {column: removal_date}
+  measures:
+    n:
+      description: leaky
+      expr: "count(*) + (SELECT count(*) FROM main.clinic_dim)"
+""")
+    with pytest.raises(SemanticsError, match="clinic_dim"):
+        bind_checks(con, defs["events"])
+
+
+def test_measure_subquery_on_the_fact_itself_is_fine(con, make_defs):
+    defs = make_defs("""\
+events:
+  fact: main.waitlist_removals
+  time: {column: removal_date}
+  measures:
+    share:
+      description: share of all removals
+      expr: "count(*) / (SELECT count(*) FROM main.waitlist_removals)"
+""")
+    assert bind_checks(con, defs["events"]) == []
