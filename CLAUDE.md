@@ -78,6 +78,16 @@ SQL Server. Excel/CSV readers for messy business files. Oracle later.
   for Dru: suppression thresholds cell rows, not per-measure filtered
   counts (documented in the design doc's suppress note). KNOWN LIMIT:
   monthly cadence completeness is a no-op at month grain (docstring'd).
+- Semantic-compiler hardening COMPLETE (2026-07-21): all 8 findings of
+  `docs/reviews/2026-07-21-semantic-compiler-adversarial-review.md` fixed
+  plus review items 2A-2F (plan:
+  `docs/plans/2026-07-21-semantic-compiler-hardening.md`) — strict YAML
+  keys, explicit `{shared: key}` dim linking (bare = local, always),
+  per-(table,key) dim uniqueness, fact-only table refs in measures,
+  `wh.last` n>=1 + date-floored anchors, all-All `values()` lane,
+  output-namespace check (+ dim/measure overlap at load), half-open
+  `TimeWindow` time lane, quoted aliases, `time_agg: avg` rejected,
+  provenance captured at `frame()`.
 - Hash-stability contract: `_project()` in provenance.py KEEPS a known
   scalar-key set and drops everything else — new serializer keys in a
   DuckDB upgrade can't shift hashes; only structural renames could, and
@@ -114,10 +124,24 @@ SQL Server. Excel/CSV readers for messy business files. Oracle later.
 - Aggregate detection trick: `SELECT <expr> FROM fact WHERE 1=0` yields
   exactly 1 row for aggregates, 0 for per-row exprs (which GROUP BY ALL
   would silently turn into grouping columns).
-- YAML names/columns are spliced into SQL unquoted — loader validates
-  them as plain identifiers (`fact`/`period`/`time` + `__*` reserved).
-  Adversarial review (2026-07-20) proved the injection: a measure named
-  `"n, wait_days AS smuggled"` regrouped a total into per-row output.
+- YAML names/columns are spliced into SQL with validated identifiers
+  (`fact`/`period`/`time` + `__*` reserved) — the loader firewall is the
+  injection defence; generated ALIASES are additionally quoted so
+  reserved-word names work, but column/table refs stay unquoted on
+  purpose (quoting would flip DuckDB to case-sensitive matching against
+  the mirror). Adversarial review (2026-07-20) proved the injection: a
+  measure named `"n, wait_days AS smuggled"` regrouped a total into
+  per-row output.
+- Time lane is HALF-OPEN internally: surface `Between` converts once in
+  `split_context` to `TimeWindow(lo, hi_exc)`; shifting, predicates and
+  completeness never special-case bound types. Don't reintroduce
+  inclusive-hi arithmetic — this bug class escaped four times before the
+  representation change.
+- Bare dim names in model YAML are ALWAYS local; shared linking is
+  explicit (`{shared: key}`); a bare name matching a shared dim is a
+  load error. Never restore name-based auto-linking.
+- Provenance data is captured at `frame()` on the executing connection;
+  `provenance()` must not re-derive data-side facts for executed slices.
 
 ## Phase 4 notes
 
