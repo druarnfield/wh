@@ -86,7 +86,7 @@ def _check_compare(model: Model, measures, compare, grain) -> None:
                 f"measure '{name}' has time_agg none — no comparisons are "
                 f"defined for it"
             )
-        if m.time_agg in ("last", "avg") and "fytd" in compare:
+        if m.time_agg == "last" and "fytd" in compare:
             raise SemanticsError(
                 f"fytd is cumulative; measure '{name}' is a point-in-time stock "
                 f"(time_agg {m.time_agg}) — model the flow as its own "

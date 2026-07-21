@@ -52,7 +52,7 @@ def test_time_agg_is_hash_relevant_but_description_is_not(con, make_defs, design
     base = variant(make_defs, design_yaml, "x", "x")
     agg = variant(
         make_defs, design_yaml,
-        "      expr: count(*)\n", "      expr: count(*)\n      time_agg: avg\n",
+        "      expr: count(*)\n", "      expr: count(*)\n      time_agg: none\n",
     )
     desc = variant(
         make_defs, design_yaml,

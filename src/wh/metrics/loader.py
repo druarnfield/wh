@@ -16,7 +16,7 @@ import yaml
 
 from ..errors import SemanticsError
 
-VALID_TIME_AGG = ("sum", "last", "avg", "none")
+VALID_TIME_AGG = ("sum", "last", "none")
 
 # Names and columns are spliced into SQL unquoted — validate them at load.
 _IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
@@ -302,6 +302,12 @@ def _parse_measure(fname, model, mname, m, snapshot) -> Measure:
         )
 
     time_agg = m.get("time_agg", "last" if snapshot else "sum")
+    if time_agg == "avg":
+        raise SemanticsError(
+            f"{fname}: {where}: time_agg 'avg' isn't computed anywhere yet — "
+            f"snapshot models always read the period's final snapshot; use "
+            f"'last' until averaging-over-snapshots is implemented"
+        )
     if time_agg not in VALID_TIME_AGG:
         raise SemanticsError(
             f"{fname}: {where}: time_agg must be one of {', '.join(VALID_TIME_AGG)}"

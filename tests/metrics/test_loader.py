@@ -309,3 +309,15 @@ events:
   measures:
     n: {description: n, expr: "count(*)"}
 """)
+
+
+def test_time_agg_avg_is_rejected_until_implemented(make_defs):
+    with pytest.raises(SemanticsError, match="avg"):
+        make_defs("""\
+census:
+  fact: main.f
+  time: {column: d}
+  snapshot: true
+  measures:
+    beds: {description: beds, expr: "max(beds)", time_agg: avg}
+""")

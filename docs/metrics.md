@@ -123,7 +123,7 @@ measures:
 | `expr:` | A DuckDB **aggregate** expression over **fact columns only**. Exactly one of `expr:` / `ratio:`. A non-aggregate expr, or one referencing dimension attributes, is rejected at bind time (a definition depending on a type-1 dim would silently mutate; put attribute logic in the curated schema). |
 | `where:` | The intrinsic predicate — first-class and encouraged; this is where "what counts as a removal" lives, in a diff. Fact columns only. Compiles to `expr FILTER (WHERE ...)`; can't be combined with an expr that already has a FILTER (fold it in). |
 | `ratio:` | `num:` + `den:` aggregate exprs; division happens once, in the outermost select (never averaged over groups). No `where:` on a ratio — put predicates in the num/den FILTERs. |
-| `time_agg:` | `sum` \| `last` \| `avg` \| `none`. **Defaults: `last` on snapshot models, `sum` on event facts.** Governs which comparisons are valid (see `compare=`), never plain-grain computability. `sum` on a snapshot model is a load error (model the flow as its own event fact). |
+| `time_agg:` | `sum` \| `last` \| `none`. **Defaults: `last` on snapshot models, `sum` on event facts.** Governs which comparisons are valid (see `compare=`), never plain-grain computability. `sum` on a snapshot model is a load error (model the flow as its own event fact). `avg` is reserved and rejected until averaging-over-snapshots is actually implemented — snapshot slices always read the period's final snapshot, and a label that computes something else would be a lie in the governed file. |
 | `additive: false` | Marks results that must not be re-summed. Distinct counts, medians, modes and ratios are non-additive automatically; provenance names them. |
 
 ### Naming rules
@@ -236,7 +236,7 @@ one year earlier; deltas are your arithmetic). Requires `grain=`.
 |---|---|---|---|
 | meaning | previous period | same period, prior year | fiscal-year-to-date cumulative |
 | `time_agg: sum` | ✓ | ✓ | ✓ |
-| `time_agg: last`/`avg` (stocks) | ✓ | ✓ | ✗ (cumulative on a stock is meaningless) |
+| `time_agg: last` (stocks) | ✓ | ✓ | ✗ (cumulative on a stock is meaningless) |
 | `time_agg: none` | ✗ | ✗ | ✗ |
 
 Mechanics worth knowing:
