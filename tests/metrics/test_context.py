@@ -99,3 +99,72 @@ def test_resolve_is_idempotent_and_plain_contexts_are_born_resolved():
     ctx = context(facility__region="North")
     assert ctx.is_resolved
     assert ctx.resolve(anchor=date(2026, 1, 1)).entries == ctx.entries
+
+
+def test_last_rejects_zero_and_negative_n():
+    with pytest.raises(SemanticsError, match="n >= 1"):
+        last(0, "day")
+    with pytest.raises(SemanticsError, match="n >= 1"):
+        last(-3, "month")
+
+
+def test_datetime_anchor_floors_to_its_date():
+    from datetime import datetime
+
+    c = context(time=last(7, "day"))
+    r = c.resolve(anchor=datetime(2026, 7, 15, 9, 30)).entries["time"]
+    assert r == Between(date(2026, 7, 9), date(2026, 7, 15))
+    c = context(time=last(1, "month"))
+    r = c.resolve(anchor=datetime(2026, 7, 15, 9, 30)).entries["time"]
+    assert r == Between(date(2026, 6, 16), date(2026, 7, 15))
+
+
+def test_between_op_coerces_string_dates():
+    ctx = context(time=Between("2025-07-01", "2025-07-31"))
+    assert ctx.entries["time"] == Between(date(2025, 7, 1), date(2025, 7, 31))
+
+
+def test_time_tuple_must_have_exactly_two_elements():
+    with pytest.raises(SemanticsError, match="start, end"):
+        context(time=("2025-07-01", "2025-07-31", "2026-01-01"))
+
+
+def test_last_year_unit_resolves_to_whole_years():
+    r = context(time=last(2, "year")).resolve(anchor=date(2026, 6, 30))
+    assert r.entries["time"] == Between(date(2024, 7, 1), date(2026, 6, 30))
+
+
+def test_time_widget_resolves_through_the_time_rules():
+    """A widget ON time= must take the time coercion path when it resolves
+    — a (start, end) value becomes Between, never a membership op."""
+    w = FakeWidget(("2025-07-01", "2025-07-31"))
+    r = context(time=w).resolve(anchor=date(2026, 1, 1))
+    assert r.entries["time"] == Between(date(2025, 7, 1), date(2025, 7, 31))
+
+
+def test_to_dict_encodes_every_op_shape():
+    ctx = context(a="x", b=["x", "y"], c=not_("z"), d=all_(),
+                  time=("2025-07-01", "2025-07-31"))
+    assert ctx.to_dict() == {
+        "a": {"eq": "x"},
+        "b": {"in": ["x", "y"]},
+        "c": {"not": "z"},
+        "d": {"all": True},
+        "time": {"between": ["2025-07-01", "2025-07-31"]},
+    }
+
+
+def test_hash_tracks_content():
+    assert hash(context(a="x")) == hash(context(a="x"))
+    assert hash(context(a="x")) != hash(context(a="y"))
+    assert hash(context(a="x")) != hash(context(b="x"))
+
+
+def test_context_equality_is_by_entries():
+    assert context(a="x") == context(a="x")
+    assert context(a="x") != context(a="y")
+    assert context(a="x") != "not a context"
+
+
+def test_context_repr_is_stable_and_sorted():
+    assert repr(context(b="y", a="x")) == "wh.context(a=Eq(value='x'), b=Eq(value='y'))"

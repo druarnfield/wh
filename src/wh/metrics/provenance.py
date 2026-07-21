@@ -132,11 +132,91 @@ def _measure_text(model: Model, m: Measure) -> str:
     return f"{text} at snapshot" if model.snapshot else text
 
 
+def capture_data(c, model: Model, compiled, args: dict) -> dict:
+    """Everything data-side a number needs to explain itself, gathered on
+    the connection (and at the moment) the number was computed. Slice.frame()
+    memoises this so provenance() describes the executed result even if the
+    mirror refreshes afterwards."""
+    tables = {model.fact: None}
+    for ref in model.dims.values():
+        if ref.shared:
+            tables[ref.shared.table] = None
+    for t in tables:
+        tables[t] = {
+            "columns": {
+                r[0]: r[1]
+                for r in c.execute(f"DESCRIBE SELECT * FROM {t} LIMIT 0").fetchall()
+            },
+            "refreshed_at": _refreshed_at(c, t),
+        }
+
+    scan = {}
+    if compiled.scan_lo:
+        (fact_min,) = c.execute(
+            f"SELECT min({model.time_column}) FROM {model.fact}"
+        ).fetchone()
+        for cmp, lo in compiled.scan_lo.items():
+            if lo is None:
+                coverage = "unbounded window"
+            elif fact_min is not None and _as_dateval(fact_min) > _as_dateval(lo):
+                coverage = (
+                    f"fact data begins {_iso(fact_min)} — {cmp} window "
+                    f"partially uncovered"
+                )
+            else:
+                coverage = "fully covered"
+            scan[cmp] = {"lo": _iso(lo), "coverage": coverage}
+
+    as_at = None
+    if compiled.asat_queries:
+        as_at = {}
+        for lane, sql in compiled.asat_queries.items():
+            rows = sorted(c.execute(sql).fetchall())
+            as_at[lane] = [
+                [_iso(r[0]), _iso(r[1])] if len(r) == 2 else [None, _iso(r[0])]
+                for r in rows
+            ]
+
+    truncation = None
+    entries = args["ctx"].to_dict()
+    time_entry = entries.get("time") if "time" in compiled.applied else None
+    if time_entry and "between" in time_entry and args["grain"]:
+        hi = date.fromisoformat(str(time_entry["between"][1])[:10])
+        if hi < period_end(hi, args["grain"], model.fiscal_year_start):
+            truncation = (
+                f"final period truncated by context (as at {hi.isoformat()})"
+            )
+
+    return {
+        "tables": tables,
+        "duckdb_version": duckdb.__version__,
+        "scan": scan,
+        "as_at": as_at,
+        "truncation": truncation,
+    }
+
+
+def _refreshed_at(c, table: str):
+    parts = table.split(".")
+    if len(parts) > 2:            # catalog-qualified: meta can't match it
+        return None
+    schema, name = parts if len(parts) == 2 else ("main", parts[0])
+    try:
+        (ts,) = c.execute(
+            "SELECT max(extracted_at) FROM _mirror.meta "
+            "WHERE schema_name = ? AND table_name = ?", [schema, name],
+        ).fetchone()
+    except duckdb.Error:
+        return None                      # no _mirror.meta (not a mirror file)
+    return _iso(ts) if ts is not None else None
+
+
 class Provenance:
     """Everything a number needs to explain itself: what was computed,
     under what definition version, filtered how, on data from when."""
 
-    def __init__(self, model: Model, compiled, args: dict, con, warnings=()):
+    def __init__(self, model: Model, compiled, args: dict, con, warnings=(),
+                 data=None):
         c = con()
         self._model = model
         self._warnings_in = list(warnings)
@@ -176,83 +256,14 @@ class Provenance:
             ),
         }
 
-        self.data = self._gather_data(c, compiled, args)
-
-    # -- data --
-
-    def _gather_data(self, c, compiled, args) -> dict:
-        tables = {self._model.fact: None}
-        for ref in self._model.dims.values():
-            if ref.shared:
-                tables[ref.shared.table] = None
-        for t in tables:
-            tables[t] = {
-                "columns": {
-                    r[0]: r[1]
-                    for r in c.execute(f"DESCRIBE SELECT * FROM {t} LIMIT 0").fetchall()
-                },
-                "refreshed_at": self._refreshed_at(c, t),
-            }
-
-        scan = {}
-        if compiled.scan_lo:
-            (fact_min,) = c.execute(
-                f"SELECT min({self._model.time_column}) FROM {self._model.fact}"
-            ).fetchone()
-            for cmp, lo in compiled.scan_lo.items():
-                if lo is None:
-                    coverage = "unbounded window"
-                elif fact_min is not None and _as_dateval(fact_min) > _as_dateval(lo):
-                    coverage = (
-                        f"fact data begins {_iso(fact_min)} — {cmp} window "
-                        f"partially uncovered"
-                    )
-                else:
-                    coverage = "fully covered"
-                scan[cmp] = {"lo": _iso(lo), "coverage": coverage}
-
-        as_at = None
-        if compiled.asat_queries:
-            as_at = {}
-            for lane, sql in compiled.asat_queries.items():
-                rows = sorted(c.execute(sql).fetchall())
-                as_at[lane] = [
-                    [_iso(r[0]), _iso(r[1])] if len(r) == 2 else [None, _iso(r[0])]
-                    for r in rows
-                ]
-
-        truncation = None
-        time_entry = self.context["applied"].get("time")
-        if time_entry and "between" in time_entry and args["grain"]:
-            hi = date.fromisoformat(str(time_entry["between"][1])[:10])
-            if hi < period_end(hi, args["grain"], self._model.fiscal_year_start):
-                truncation = (
-                    f"final period truncated by context (as at {hi.isoformat()})"
-                )
-
-        return {
-            "tables": tables,
-            "duckdb_version": duckdb.__version__,
-            "warnings": list(self._warnings_in),
-            "scan": scan,
-            "as_at": as_at,
-            "truncation": truncation,
-            "model_hash": self._model_hash,
-        }
-
-    def _refreshed_at(self, c, table: str):
-        parts = table.split(".")
-        if len(parts) > 2:            # catalog-qualified: meta can't match it
-            return None
-        schema, name = parts if len(parts) == 2 else ("main", parts[0])
-        try:
-            (ts,) = c.execute(
-                "SELECT max(extracted_at) FROM _mirror.meta "
-                "WHERE schema_name = ? AND table_name = ?", [schema, name],
-            ).fetchone()
-        except duckdb.Error:
-            return None                      # no _mirror.meta (not a mirror file)
-        return _iso(ts) if ts is not None else None
+        # warnings and model hash are definition-side — they belong to this
+        # object, not the execution-time capture
+        self.data = (
+            dict(data) if data is not None
+            else capture_data(c, model, compiled, args)
+        )
+        self.data["warnings"] = list(self._warnings_in)
+        self.data["model_hash"] = self._model_hash
 
     # -- output --
 

@@ -78,11 +78,32 @@ SQL Server. Excel/CSV readers for messy business files. Oracle later.
   for Dru: suppression thresholds cell rows, not per-measure filtered
   counts (documented in the design doc's suppress note). KNOWN LIMIT:
   monthly cadence completeness is a no-op at month grain (docstring'd).
+- Semantic-compiler hardening COMPLETE (2026-07-21): all 8 findings of
+  `docs/reviews/2026-07-21-semantic-compiler-adversarial-review.md` fixed
+  plus review items 2A-2F (plan:
+  `docs/plans/2026-07-21-semantic-compiler-hardening.md`) — strict YAML
+  keys, explicit `{shared: key}` dim linking (bare = local, always),
+  per-(table,key) dim uniqueness, fact-only table refs in measures,
+  `wh.last` n>=1 + date-floored anchors, all-All `values()` lane,
+  output-namespace check (+ dim/measure overlap at load), half-open
+  `TimeWindow` time lane, quoted aliases, `time_agg: avg` rejected,
+  provenance captured at `frame()`.
 - Hash-stability contract: `_project()` in provenance.py KEEPS a known
   scalar-key set and drops everything else — new serializer keys in a
   DuckDB upgrade can't shift hashes; only structural renames could, and
   the stamped duckdb version explains those. Don't "improve" it to
   keep-all-minus-noise; the allowlist IS the stability mechanism.
+- Test harness COMPLETE (2026-07-21): trust-contract layers per
+  `docs/plans/2026-07-21-metrics-test-harness.md` — generative spec
+  vocabulary (`tests/metrics/strategies.py`), independent oracle +
+  differential (plain/compare/suppress/complete), metamorphic
+  properties, loader totality fuzzing, mutation baseline (timegrain
+  96%, context_ops 91%, compiler 88.5% killed; survivor ledger and
+  procedure in `docs/testing.md`), engine matrix script. Findings
+  fixed along the way: NUL bytes in context values broke `_lit`,
+  loader crashed on non-mapping `dimensions:`, and two doc
+  clarifications (empty ungrouped slice = one row; empty fytd cell =
+  NULL gap, not 0).
 
 ## Metrics-layer notes (design invariants — keep these true)
 
@@ -114,10 +135,35 @@ SQL Server. Excel/CSV readers for messy business files. Oracle later.
 - Aggregate detection trick: `SELECT <expr> FROM fact WHERE 1=0` yields
   exactly 1 row for aggregates, 0 for per-row exprs (which GROUP BY ALL
   would silently turn into grouping columns).
-- YAML names/columns are spliced into SQL unquoted — loader validates
-  them as plain identifiers (`fact`/`period`/`time` + `__*` reserved).
-  Adversarial review (2026-07-20) proved the injection: a measure named
-  `"n, wait_days AS smuggled"` regrouped a total into per-row output.
+- YAML names/columns are spliced into SQL with validated identifiers
+  (`fact`/`period`/`time` + `__*` reserved) — the loader firewall is the
+  injection defence; generated ALIASES are additionally quoted so
+  reserved-word names work, but column/table refs stay unquoted on
+  purpose (quoting would flip DuckDB to case-sensitive matching against
+  the mirror). Adversarial review (2026-07-20) proved the injection: a
+  measure named `"n, wait_days AS smuggled"` regrouped a total into
+  per-row output.
+- Time lane is HALF-OPEN internally: surface `Between` converts once in
+  `split_context` to `TimeWindow(lo, hi_exc)`; shifting, predicates and
+  completeness never special-case bound types. Don't reintroduce
+  inclusive-hi arithmetic — this bug class escaped four times before the
+  representation change.
+- Bare dim names in model YAML are ALWAYS local; shared linking is
+  explicit (`{shared: key}`); a bare name matching a shared dim is a
+  load error. Never restore name-based auto-linking.
+- Provenance data is captured at `frame()` on the executing connection;
+  `provenance()` must not re-derive data-side facts for executed slices.
+- `tests/metrics/oracle.py` must NEVER import `wh.*` — its independence
+  from the compiler is what makes differential agreement evidence; the
+  duplication with timegrain/compiler is deliberate. Do not "refactor"
+  it away.
+- New compiler features are not done until they have an oracle
+  interpretation (differential) or an explicit metamorphic property —
+  structural tests alone don't count as coverage for semantics.
+- Generative tests carry `@pytest.mark.fuzz` (default profile 40
+  examples keeps `uv run pytest` fast); `HYPOTHESIS_PROFILE=deep` is
+  the nightly-strength run. `docs/testing.md` is the harness reference:
+  guarantee-traceability table, mutation survivor ledger, budgets.
 
 ## Phase 4 notes
 
@@ -165,6 +211,9 @@ SQL Server. Excel/CSV readers for messy business files. Oracle later.
 
 - `uv run pytest` — full suite; SQL Server integration tests auto-skip
 - `WH_TEST_DSN='Server=localhost,1433;Database=ExecReporting;UID=sa;PWD=...;Encrypt=no;TrustServerCertificate=yes;' uv run pytest` — include integration tests (local dev server)
+- `HYPOTHESIS_PROFILE=deep uv run pytest tests/metrics -m fuzz` — deep generative run (2000 examples/test, ~10 min)
+- `uv run mutmut run "wh.metrics.<module>.*"` — mutation testing, staged per module (see docs/testing.md; compiler takes ~25 min)
+- `bash scripts/engine_matrix.sh` — metrics suite against pinned + latest DuckDB
 - `uv run wh validate` / `uv run wh mirror [--only <table>]` — CLI
 - Dev SQL Server: localhost,1433, database ExecReporting; password lives in
   `WH_WAREHOUSE_PWD` (ask the user; never write it into tracked files).

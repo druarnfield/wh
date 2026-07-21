@@ -83,11 +83,17 @@ dimensions:
     hierarchy: [clinic, region]   # optional, finest first; entries must be attributes
 ```
 
-A model references a shared dim by name, supplying only its fact-side key
-column (`facility: clinic_code`). Same name = same dimension, everywhere —
-that identity is what lets one context apply across models.
+A model references a shared dim explicitly, supplying its fact-side key
+column (`facility: {shared: clinic_code}`). Same name = same dimension,
+everywhere — that identity is what lets one context apply across models.
+Bare `name: column` entries never link; they always declare a local dim,
+and a bare name that matches a shared dim is a load error, so adding a
+shared dim later can never silently capture existing local dims.
 
 ### Models
+
+Unknown keys anywhere in a definition are a load error — typos never
+silently change a model's semantics.
 
 | Key | Required | Meaning |
 |---|---|---|
@@ -97,7 +103,7 @@ that identity is what lets one context apply across models.
 | `time: cadence:` | no | `daily` / `weekly` / `monthly` — the expected snapshot rhythm; sharpens `complete_periods` on snapshot models. |
 | `snapshot:` | no (false) | `true` = this fact is a **stock** (repeated censuses). See below. |
 | `strict_context:` | no (false) | `true` = context entries that don't apply to this model are errors, not silently skipped (per-slice `strict_context=` still overrides — and provenance confesses the override). |
-| `dimensions:` | no | `name: fact_column`. If `name` matches a shared dim, it's a reference; otherwise it's a **local (degenerate) dim** — the fact column itself is the attribute. |
+| `dimensions:` | no | `name: fact_column` declares a **local (degenerate) dim** — the fact column itself is the attribute. `name: {shared: fact_key_column}` references the shared dim `name` (a load error if no such shared dim exists). A bare name that matches a shared dim is a load error — linking is always explicit. |
 | `measures:` | yes (≥1) | See next. |
 
 ### Measures
@@ -117,7 +123,7 @@ measures:
 | `expr:` | A DuckDB **aggregate** expression over **fact columns only**. Exactly one of `expr:` / `ratio:`. A non-aggregate expr, or one referencing dimension attributes, is rejected at bind time (a definition depending on a type-1 dim would silently mutate; put attribute logic in the curated schema). |
 | `where:` | The intrinsic predicate — first-class and encouraged; this is where "what counts as a removal" lives, in a diff. Fact columns only. Compiles to `expr FILTER (WHERE ...)`; can't be combined with an expr that already has a FILTER (fold it in). |
 | `ratio:` | `num:` + `den:` aggregate exprs; division happens once, in the outermost select (never averaged over groups). No `where:` on a ratio — put predicates in the num/den FILTERs. |
-| `time_agg:` | `sum` \| `last` \| `avg` \| `none`. **Defaults: `last` on snapshot models, `sum` on event facts.** Governs which comparisons are valid (see `compare=`), never plain-grain computability. `sum` on a snapshot model is a load error (model the flow as its own event fact). |
+| `time_agg:` | `sum` \| `last` \| `none`. **Defaults: `last` on snapshot models, `sum` on event facts.** Governs which comparisons are valid (see `compare=`), never plain-grain computability. `sum` on a snapshot model is a load error (model the flow as its own event fact). `avg` is reserved and rejected until averaging-over-snapshots is actually implemented — snapshot slices always read the period's final snapshot, and a label that computes something else would be a lie in the governed file. |
 | `additive: false` | Marks results that must not be re-summed. Distinct counts, medians, modes and ratios are non-additive automatically; provenance names them. |
 
 ### Naming rules
@@ -183,6 +189,12 @@ semantics:
 `grain=` takes one level and yields one `period` column (period-start date).
 Time is addressed via `grain=`/`compare=`, never `by=`.
 
+Result rows exist only for nonempty groups (`GROUP BY ALL` semantics —
+a period/category with no matching rows is absent, not zero). The one
+exception is standard SQL: with no `grain=` and no `by=` the slice is an
+ungrouped aggregate and always returns exactly one row, even over an
+empty selection (counts 0, sums and ratios NULL).
+
 ### The filter context
 
 An immutable value object over declared attributes — no SQL, ever.
@@ -230,7 +242,7 @@ one year earlier; deltas are your arithmetic). Requires `grain=`.
 |---|---|---|---|
 | meaning | previous period | same period, prior year | fiscal-year-to-date cumulative |
 | `time_agg: sum` | ✓ | ✓ | ✓ |
-| `time_agg: last`/`avg` (stocks) | ✓ | ✓ | ✗ (cumulative on a stock is meaningless) |
+| `time_agg: last` (stocks) | ✓ | ✓ | ✗ (cumulative on a stock is meaningless) |
 | `time_agg: none` | ✗ | ✗ | ✗ |
 
 Mechanics worth knowing:
@@ -247,7 +259,11 @@ Mechanics worth knowing:
 - On snapshot models, each comparison period is evaluated at **its own**
   as-at census; both moments appear in provenance.
 - `fytd` recomputes from base rows every time, so `count(DISTINCT ...)` fytd
-  is a true distinct count, not a sum of monthly distinct counts.
+  is a true distinct count, not a sum of monthly distinct counts. It is
+  FY-bounded via the *period start's* fiscal year, so a period straddling
+  the FY boundary (a calendar year or ISO week under a July start)
+  accumulates only its starting FY; a cell with no rows in that FY reads
+  NULL — the gap rule — not 0 (0 means rows existed but none matched).
 - `yoy` is invalid at `week` grain (a year shift misaligns week starts).
 
 ### `complete_periods=True`

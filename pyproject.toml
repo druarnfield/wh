@@ -27,10 +27,26 @@ module-name = "wh"
 
 [dependency-groups]
 dev = [
+    "hypothesis>=6.158.0",
     "marimo>=0.23.14",
+    "mutmut>=3.6.0",
     "openpyxl>=3.1.5",
     "pandas>=3.0.3",
     "polars>=1.42.1",
     "pytest>=8",
     "python-calamine>=0.8.2",
 ]
+
+[tool.pytest.ini_options]
+addopts = "--ignore=mutants"    # mutmut's scratch copy of the repo
+markers = [
+    "fuzz: generative (Hypothesis) tests — budget controlled by HYPOTHESIS_PROFILE",
+]
+
+# mutmut 3.x keys (paths_to_mutate/tests_dir are the deprecated 2.x names).
+# Stage runs per module: uv run mutmut run "wh.metrics.timegrain.*"
+[tool.mutmut]
+source_paths = ["src"]
+only_mutate = ["src/wh/metrics/*"]
+pytest_add_cli_args = ["-m", "not fuzz"]
+pytest_add_cli_args_test_selection = ["tests/metrics"]

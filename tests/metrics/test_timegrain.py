@@ -41,3 +41,32 @@ def test_calendar_fiscal_degenerates_to_year_and_quarter():
 def test_unknown_grain_names_the_valid_set():
     with pytest.raises(SemanticsError, match="fy_quarter"):
         grain_expr("fortnight", "c", 7)
+
+
+def test_period_start_mirrors_the_engine_exactly():
+    """period_start IS grain_expr in Python (provenance arithmetic) — walk
+    a dense multi-year date grid at several fiscal starts and hold the two
+    cell-exact equal. Mutation tripwire for every branch of period_start."""
+    from datetime import timedelta
+
+    from wh.metrics.timegrain import GRAINS, period_start
+
+    con = duckdb.connect()
+    days = sorted(date(2024, 1, 1) + timedelta(days=13 * i) for i in range(85))
+    con.execute("CREATE TABLE days (d DATE)")
+    con.executemany("INSERT INTO days VALUES (?)", [(d,) for d in days])
+    for fys in (1, 7, 10):
+        for grain in GRAINS:
+            got = [r[0] for r in con.execute(
+                f"SELECT {grain_expr(grain, 'd', fys)} FROM days ORDER BY d"
+            ).fetchall()]
+            want = [period_start(d, grain, fys) for d in days]
+            assert got == want, (grain, fys)
+
+
+def test_fy_start_boundary_month_opens_the_new_fy():
+    from wh.metrics.timegrain import fy_start
+
+    assert fy_start(date(2026, 7, 1), 7) == date(2026, 7, 1)
+    assert fy_start(date(2026, 6, 30), 7) == date(2025, 7, 1)
+    assert fy_start(date(2026, 12, 31), 7) == date(2026, 7, 1)

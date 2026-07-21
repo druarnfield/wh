@@ -83,7 +83,7 @@ def test_compare_cte_shape_and_scan_widening(con, defs):
             LEFT JOIN main.clinic_dim AS facility
                    ON fact.clinic_code = facility.clinic_code
             WHERE fact.removal_date >= DATE '2026-06-01'
-              AND fact.removal_date < DATE '2026-07-31' + INTERVAL 1 DAY
+              AND fact.removal_date < DATE '2026-08-01'
             GROUP BY ALL
         ), __cmp_yoy AS (
             SELECT CAST(date_trunc('month', fact.removal_date) AS DATE) AS period,
@@ -93,7 +93,7 @@ def test_compare_cte_shape_and_scan_widening(con, defs):
             LEFT JOIN main.clinic_dim AS facility
                    ON fact.clinic_code = facility.clinic_code
             WHERE fact.removal_date >= DATE '2025-06-01'
-              AND fact.removal_date < DATE '2025-07-31' + INTERVAL 1 DAY
+              AND fact.removal_date < DATE '2025-08-01'
             GROUP BY ALL
         )
         SELECT b.period,
@@ -347,3 +347,23 @@ def test_snapshot_prior_uses_the_prior_periods_own_asat(con, defs):
     # June evaluated at ITS as-at (06-26): North 3, South 1 (C3 lagging absent)
     assert got[(july, "North")]["patients_waiting_prior"] == 3
     assert got[(july, "South")]["patients_waiting_prior"] == 1
+
+
+def test_shifted_windows_keep_month_end_days_for_datetime_bounds(con, make_defs):
+    """The date path shifts the exclusive bound; a datetime hi must get the
+    same treatment or Jun 30 23:59:59 clamps to May 30 and every prior/yoy
+    value silently loses the last day of its month."""
+    from datetime import datetime
+
+    con.execute(
+        "CREATE TABLE main.dtev AS FROM (VALUES "
+        "(TIMESTAMP '2026-05-31 14:00:00'), "
+        "(TIMESTAMP '2026-06-10 09:00:00')) t(d)"
+    )
+    m = make_defs(EVENTS_MIN.replace("main.ev", "main.dtev"))["ev"]
+    rows = run(con, compile_slice(
+        m, ["n"], grain="month", compare=["prior"],
+        ctx=context(time=(datetime(2026, 6, 1, 0, 0),
+                          datetime(2026, 6, 30, 23, 59, 59))),
+    ))
+    assert rows[0]["n_prior"] == 1                 # May 31 afternoon included

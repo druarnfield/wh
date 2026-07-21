@@ -156,12 +156,12 @@ def test_effective_additivity(defs, make_defs):
     assert make_defs(explicit)["removals"].measures["removals"].additive is False
 
 
-def test_local_dim_cannot_be_a_mapping(make_defs):
+def test_dim_mapping_form_only_accepts_shared(make_defs):
     bad = MODEL_MIN.replace(
         "  measures:\n",
         "  dimensions:\n    thing: {table: t, key_column: k}\n  measures:\n",
     )
-    with pytest.raises(SemanticsError, match="dimensions"):
+    with pytest.raises(SemanticsError, match="shared"):
         make_defs(bad)
 
 
@@ -193,3 +193,144 @@ def test_fact_table_must_be_a_plain_identifier(make_defs):
     bad = MODEL_MIN.replace("fact: main.removals", "fact: main.removals; DROP TABLE x")
     with pytest.raises(SemanticsError, match="fact table"):
         make_defs(bad)
+
+
+# --- strict keys (hardening Task 1) ---
+
+
+def test_unknown_model_key_errors_with_hint(make_defs):
+    with pytest.raises(SemanticsError, match="snapshot"):
+        make_defs("""\
+census:
+  fact: main.f
+  snapsot: true
+  time: {column: d}
+  measures:
+    n: {description: n, expr: "count(*)"}
+""")
+
+
+def test_unknown_measure_key_errors(make_defs):
+    with pytest.raises(SemanticsError, match="unknown key"):
+        make_defs("""\
+census:
+  fact: main.f
+  time: {column: d}
+  measures:
+    n: {description: n, expr: "count(*)", wear: "1=1"}
+""")
+
+
+def test_unknown_time_key_errors(make_defs):
+    with pytest.raises(SemanticsError, match="cadence"):
+        make_defs("""\
+census:
+  fact: main.f
+  time: {column: d, cadense: daily}
+  measures:
+    n: {description: n, expr: "count(*)"}
+""")
+
+
+def test_unknown_shared_dim_key_errors(make_defs):
+    with pytest.raises(SemanticsError, match="unknown key"):
+        make_defs("""\
+dimensions:
+  facility:
+    table: main.dim
+    key_colunm: code
+    attributes: {name: label}
+""")
+
+
+def test_unknown_ratio_key_errors(make_defs):
+    with pytest.raises(SemanticsError, match="unknown key"):
+        make_defs("""\
+census:
+  fact: main.f
+  time: {column: d}
+  measures:
+    pct:
+      description: p
+      ratio: {num: "count(*)", denum: "count(*)"}
+""")
+
+
+# --- explicit local/shared dim linking (hardening Task 2) ---
+
+from fixtures_data import DIMS_YAML
+
+LOCAL_VS_SHARED_MODEL = """\
+events:
+  fact: main.events
+  time: {column: d}
+  dimensions:
+    facility: {shared: clinic_code}
+    urgency: urgency_code
+  measures:
+    n: {description: n, expr: "count(*)"}
+"""
+
+
+def test_bare_dimension_is_always_local(make_defs):
+    defs = make_defs(DIMS_YAML, LOCAL_VS_SHARED_MODEL)
+    assert defs["events"].dims["urgency"].shared is None
+    assert defs["events"].dims["urgency"].fact_column == "urgency_code"
+
+
+def test_shared_reference_is_explicit(make_defs):
+    defs = make_defs(DIMS_YAML, LOCAL_VS_SHARED_MODEL)
+    ref = defs["events"].dims["facility"]
+    assert ref.shared is not None and ref.shared.table == "main.clinic_dim"
+    assert ref.fact_column == "clinic_code"
+
+
+def test_bare_name_colliding_with_shared_dim_errors(make_defs):
+    with pytest.raises(SemanticsError, match="shared"):
+        make_defs(DIMS_YAML, """\
+events:
+  fact: main.events
+  time: {column: d}
+  dimensions:
+    facility: clinic_code
+  measures:
+    n: {description: n, expr: "count(*)"}
+""")
+
+
+def test_shared_reference_without_declaration_errors(make_defs):
+    with pytest.raises(SemanticsError, match="doesn't exist"):
+        make_defs("""\
+events:
+  fact: main.events
+  time: {column: d}
+  dimensions:
+    facility: {shared: clinic_code}
+  measures:
+    n: {description: n, expr: "count(*)"}
+""")
+
+
+def test_time_agg_avg_is_rejected_until_implemented(make_defs):
+    with pytest.raises(SemanticsError, match="avg"):
+        make_defs("""\
+census:
+  fact: main.f
+  time: {column: d}
+  snapshot: true
+  measures:
+    beds: {description: beds, expr: "max(beds)", time_agg: avg}
+""")
+
+
+def test_dim_and_measure_sharing_a_name_is_a_load_error(make_defs):
+    with pytest.raises(SemanticsError, match="both"):
+        make_defs("""\
+events:
+  fact: main.events
+  time: {column: d}
+  dimensions:
+    n: category
+  measures:
+    n: {description: n, expr: "count(*)"}
+""")

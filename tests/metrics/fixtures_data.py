@@ -29,8 +29,8 @@ waitlist:
     cadence: weekly
   snapshot: true
   dimensions:
-    facility: clinic_code
-    doctor: doctor_id
+    facility: {shared: clinic_code}
+    doctor: {shared: doctor_id}
     urgency: urgency_category
   measures:
     patients_waiting:
@@ -59,8 +59,8 @@ removals:
   time:
     column: removal_date
   dimensions:
-    facility: clinic_code
-    doctor: doctor_id
+    facility: {shared: clinic_code}
+    doctor: {shared: doctor_id}
   measures:
     removals:
       expr: count(*)

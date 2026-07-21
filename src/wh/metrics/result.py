@@ -33,6 +33,7 @@ class Slice:
         self._con = con
         self._preferred_backend = preferred_backend
         self._warnings = list(warnings)
+        self._data_capture = None
         if not ctx.is_resolved:
             ctx = ctx.resolve(anchor=self._anchor())
         self._args = dict(
@@ -77,8 +78,16 @@ class Slice:
 
     def frame(self, backend: str | None = None):
         from ..frames import default_backend, from_arrow
+        from .provenance import capture_data
 
-        table = self._con().sql(self.sql).to_arrow_table()
+        con = self._con()
+        table = con.sql(self.sql).to_arrow_table()
+        if self._data_capture is None:
+            # provenance must describe THIS execution — capture the
+            # data-side facts on the same connection, at the same moment
+            self._data_capture = capture_data(
+                con, self._model, self._compiled, self._args
+            )
         return from_arrow(
             table, backend or self._preferred_backend or default_backend()
         )
@@ -99,7 +108,8 @@ class Slice:
         from .provenance import Provenance
 
         return Provenance(
-            self._model, self._compiled, self._args, self._con, self._warnings
+            self._model, self._compiled, self._args, self._con,
+            self._warnings, data=self._data_capture,
         )
 
     def view(self, name: str) -> None:

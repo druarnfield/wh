@@ -18,3 +18,9 @@ parquet/
 # Scratch SQL files (local only)
 attatch.sql
 start.sql
+
+# Hypothesis example database
+.hypothesis/
+
+# mutmut scratch (mutated copy of the repo) + result db
+mutants/

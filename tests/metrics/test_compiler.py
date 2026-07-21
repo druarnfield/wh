@@ -12,7 +12,7 @@ events:
   time:
     column: event_date
   dimensions:
-    facility: clinic_code
+    facility: {shared: clinic_code}
     urgency: urgency_code
   measures:
     n:
@@ -88,7 +88,7 @@ def test_time_context_is_day_inclusive_on_both_ends(con, defs):
         SELECT count(*) FILTER (WHERE removal_reason <> 'ADMIN') AS removals
         FROM main.waitlist_removals AS fact
         WHERE fact.removal_date >= DATE '2025-07-01'
-          AND fact.removal_date < DATE '2026-06-30' + INTERVAL 1 DAY
+          AND fact.removal_date < DATE '2026-07-01'
         GROUP BY ALL
     """)
 
@@ -148,13 +148,13 @@ def test_snapshot_asat_join_shape(con, defs):
                    max(snapshot_date) AS __as_at
             FROM main.waitlist
             WHERE snapshot_date >= DATE '2026-06-01'
-              AND snapshot_date < DATE '2026-06-30' + INTERVAL 1 DAY
+              AND snapshot_date < DATE '2026-07-01'
             GROUP BY 1
         ) AS __asat
           ON CAST(date_trunc('month', fact.snapshot_date) AS DATE) = __asat.__period
          AND fact.snapshot_date = __asat.__as_at
         WHERE fact.snapshot_date >= DATE '2026-06-01'
-          AND fact.snapshot_date < DATE '2026-06-30' + INTERVAL 1 DAY
+          AND fact.snapshot_date < DATE '2026-07-01'
         GROUP BY ALL
         ORDER BY period
     """)
@@ -213,3 +213,53 @@ def test_unresolved_context_is_refused(defs):
 
     with pytest.raises(SemanticsError, match="resolve"):
         compile_slice(defs["removals"], ["removals"], ctx=context(doctor__specialty=W()))
+
+
+def test_duplicate_output_columns_error(defs):
+    with pytest.raises(SemanticsError, match="produced twice"):
+        compile_slice(defs["removals"], ["removals", "removals"])
+    with pytest.raises(SemanticsError, match="produced twice"):
+        compile_slice(
+            defs["removals"], ["removals"],
+            by=["facility.region", "facility.region"],
+        )
+
+
+def test_by_entry_colliding_with_comparison_column_errors(make_defs):
+    defs = make_defs("""\
+events:
+  fact: main.events
+  time: {column: d}
+  dimensions:
+    n_prior: category
+  measures:
+    n: {description: n, expr: "count(*)"}
+""")
+    with pytest.raises(SemanticsError, match="n_prior"):
+        compile_slice(
+            defs["events"], ["n"], by=["n_prior"], grain="month",
+            compare=["prior"],
+        )
+
+
+def test_reserved_word_names_compile_and_execute(con, make_defs):
+    """Aliases parse unquoted, but the ratio/suppress wrapper REFERENCES
+    them bare in its outer select — where keywords like select/union are
+    parser errors unless quoted."""
+    defs = make_defs("""\
+events:
+  fact: main.waitlist_removals
+  time: {column: removal_date}
+  dimensions:
+    union: removal_reason
+  measures:
+    select: {description: n, expr: "count(*)"}
+    pct:
+      description: p
+      ratio: {num: "count(*)", den: "count(*)"}
+""")
+    c = compile_slice(defs["events"], ["select", "pct"], by=["union"], grain="month")
+    res = con.execute(c.sql)
+    cols = [d[0] for d in res.description]
+    assert "select" in cols and "union" in cols and "pct" in cols
+    assert res.fetchall()

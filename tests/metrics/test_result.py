@@ -63,4 +63,5 @@ def test_relative_time_anchors_to_fact_max_not_wall_clock(defs, con):
     s = make(defs, con, ctx=context(time=last(4, "week")))
     t = s.frame(backend="pyarrow")
     assert t.column("removals").to_pylist() == [3]
-    assert "2026-06-11" in s.sql and "2026-07-08" in s.sql
+    # hi compiles as the exclusive next-day bound of the 07-08 anchor
+    assert "2026-06-11" in s.sql and "2026-07-09" in s.sql
