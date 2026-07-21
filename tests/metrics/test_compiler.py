@@ -12,7 +12,7 @@ events:
   time:
     column: event_date
   dimensions:
-    facility: clinic_code
+    facility: {shared: clinic_code}
     urgency: urgency_code
   measures:
     n:

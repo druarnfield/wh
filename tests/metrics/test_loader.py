@@ -156,12 +156,12 @@ def test_effective_additivity(defs, make_defs):
     assert make_defs(explicit)["removals"].measures["removals"].additive is False
 
 
-def test_local_dim_cannot_be_a_mapping(make_defs):
+def test_dim_mapping_form_only_accepts_shared(make_defs):
     bad = MODEL_MIN.replace(
         "  measures:\n",
         "  dimensions:\n    thing: {table: t, key_column: k}\n  measures:\n",
     )
-    with pytest.raises(SemanticsError, match="dimensions"):
+    with pytest.raises(SemanticsError, match="shared"):
         make_defs(bad)
 
 
@@ -253,4 +253,59 @@ census:
     pct:
       description: p
       ratio: {num: "count(*)", denum: "count(*)"}
+""")
+
+
+# --- explicit local/shared dim linking (hardening Task 2) ---
+
+from fixtures_data import DIMS_YAML
+
+LOCAL_VS_SHARED_MODEL = """\
+events:
+  fact: main.events
+  time: {column: d}
+  dimensions:
+    facility: {shared: clinic_code}
+    urgency: urgency_code
+  measures:
+    n: {description: n, expr: "count(*)"}
+"""
+
+
+def test_bare_dimension_is_always_local(make_defs):
+    defs = make_defs(DIMS_YAML, LOCAL_VS_SHARED_MODEL)
+    assert defs["events"].dims["urgency"].shared is None
+    assert defs["events"].dims["urgency"].fact_column == "urgency_code"
+
+
+def test_shared_reference_is_explicit(make_defs):
+    defs = make_defs(DIMS_YAML, LOCAL_VS_SHARED_MODEL)
+    ref = defs["events"].dims["facility"]
+    assert ref.shared is not None and ref.shared.table == "main.clinic_dim"
+    assert ref.fact_column == "clinic_code"
+
+
+def test_bare_name_colliding_with_shared_dim_errors(make_defs):
+    with pytest.raises(SemanticsError, match="shared"):
+        make_defs(DIMS_YAML, """\
+events:
+  fact: main.events
+  time: {column: d}
+  dimensions:
+    facility: clinic_code
+  measures:
+    n: {description: n, expr: "count(*)"}
+""")
+
+
+def test_shared_reference_without_declaration_errors(make_defs):
+    with pytest.raises(SemanticsError, match="doesn't exist"):
+        make_defs("""\
+events:
+  fact: main.events
+  time: {column: d}
+  dimensions:
+    facility: {shared: clinic_code}
+  measures:
+    n: {description: n, expr: "count(*)"}
 """)

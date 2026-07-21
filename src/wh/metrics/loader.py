@@ -208,15 +208,41 @@ def _parse_model(fname, name, spec, shared_dims, fiscal_year_start) -> Model:
 
     dims: dict[str, DimRef] = {}
     for dname, v in (spec.get("dimensions") or {}).items():
+        _check_name(fname, "dimension", dname)
+        if isinstance(v, dict):
+            _reject_unknown(
+                fname, f"model '{name}': dimension '{dname}'", v, ("shared",)
+            )
+            col = v.get("shared")
+            if not isinstance(col, str):
+                raise SemanticsError(
+                    f"{fname}: model '{name}': dimension '{dname}': 'shared:' "
+                    f"takes the fact-side key column, e.g. "
+                    f"{dname}: {{shared: {dname}_code}}"
+                )
+            if dname not in shared_dims:
+                raise SemanticsError(
+                    f"{fname}: model '{name}': dimension '{dname}' references "
+                    f"a shared dimension that doesn't exist — declare it under "
+                    f"a top-level 'dimensions:' block (or drop 'shared:' for a "
+                    f"local dim)"
+                )
+            _check_column(fname, f"fact column of '{dname}'", col)
+            dims[dname] = DimRef(shared=shared_dims[dname], fact_column=col)
+            continue
         if not isinstance(v, str):
             raise SemanticsError(
                 f"{fname}: model '{name}': dimension '{dname}' must be a fact "
-                f"column name — shared dims are declared under top-level "
-                f"'dimensions:', not inline"
+                f"column (local dim) or {{shared: <fact key column>}}"
             )
-        _check_name(fname, "dimension", dname)
+        if dname in shared_dims:
+            raise SemanticsError(
+                f"{fname}: model '{name}': dimension '{dname}' is also a "
+                f"shared dimension — write {dname}: {{shared: {v}}} to "
+                f"reference it, or rename the local dim"
+            )
         _check_column(fname, f"fact column of '{dname}'", v)
-        dims[dname] = DimRef(shared=shared_dims.get(dname), fact_column=v)
+        dims[dname] = DimRef(shared=None, fact_column=v)
 
     raw_measures = spec.get("measures")
     if not isinstance(raw_measures, dict) or not raw_measures:

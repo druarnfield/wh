@@ -83,9 +83,12 @@ dimensions:
     hierarchy: [clinic, region]   # optional, finest first; entries must be attributes
 ```
 
-A model references a shared dim by name, supplying only its fact-side key
-column (`facility: clinic_code`). Same name = same dimension, everywhere —
-that identity is what lets one context apply across models.
+A model references a shared dim explicitly, supplying its fact-side key
+column (`facility: {shared: clinic_code}`). Same name = same dimension,
+everywhere — that identity is what lets one context apply across models.
+Bare `name: column` entries never link; they always declare a local dim,
+and a bare name that matches a shared dim is a load error, so adding a
+shared dim later can never silently capture existing local dims.
 
 ### Models
 
@@ -100,7 +103,7 @@ silently change a model's semantics.
 | `time: cadence:` | no | `daily` / `weekly` / `monthly` — the expected snapshot rhythm; sharpens `complete_periods` on snapshot models. |
 | `snapshot:` | no (false) | `true` = this fact is a **stock** (repeated censuses). See below. |
 | `strict_context:` | no (false) | `true` = context entries that don't apply to this model are errors, not silently skipped (per-slice `strict_context=` still overrides — and provenance confesses the override). |
-| `dimensions:` | no | `name: fact_column`. If `name` matches a shared dim, it's a reference; otherwise it's a **local (degenerate) dim** — the fact column itself is the attribute. |
+| `dimensions:` | no | `name: fact_column` declares a **local (degenerate) dim** — the fact column itself is the attribute. `name: {shared: fact_key_column}` references the shared dim `name` (a load error if no such shared dim exists). A bare name that matches a shared dim is a load error — linking is always explicit. |
 | `measures:` | yes (≥1) | See next. |
 
 ### Measures
