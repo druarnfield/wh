@@ -1,12 +1,25 @@
 """Fixtures for the metrics layer: the design-doc YAML, a loader helper,
 a seeded in-memory mirror, and the parse-tree SQL equality helper."""
 
+import os
+
 import duckdb
 import pytest
+from hypothesis import HealthCheck, settings
 
 from wh.metrics.loader import load_definitions
 
 from fixtures_data import DIMS_YAML, REMOVALS_YAML, SEED_SQL, WAITLIST_YAML
+
+settings.register_profile(
+    "default", max_examples=40, deadline=None,
+    suppress_health_check=[HealthCheck.too_slow],
+)
+settings.register_profile(
+    "deep", max_examples=2000, deadline=None,
+    suppress_health_check=[HealthCheck.too_slow],
+)
+settings.load_profile(os.environ.get("HYPOTHESIS_PROFILE", "default"))
 
 
 @pytest.fixture

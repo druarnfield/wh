@@ -27,10 +27,17 @@ module-name = "wh"
 
 [dependency-groups]
 dev = [
+    "hypothesis>=6.158.0",
     "marimo>=0.23.14",
+    "mutmut>=3.6.0",
     "openpyxl>=3.1.5",
     "pandas>=3.0.3",
     "polars>=1.42.1",
     "pytest>=8",
     "python-calamine>=0.8.2",
+]
+
+[tool.pytest.ini_options]
+markers = [
+    "fuzz: generative (Hypothesis) tests — budget controlled by HYPOTHESIS_PROFILE",
 ]
