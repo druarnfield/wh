@@ -80,8 +80,9 @@ def _rows(draw, snapshot):
 
 
 @st.composite
-def cases(draw):
-    snapshot = draw(st.booleans())
+def cases(draw, snapshot=None):
+    if snapshot is None:
+        snapshot = draw(st.booleans())
     ms = dict(MEASURES)
     if snapshot:
         ms = {k: v for k, v in ms.items() if k in SNAPSHOT_MEASURES}
@@ -109,8 +110,14 @@ def _ctx_op(draw, pool):
 
 @st.composite
 def scenarios(draw, with_compare=False, with_suppress=False,
-              with_complete=False):
-    case = draw(cases())
+              with_complete=False, event_only=False, require_ctx=False,
+              require_window=None):
+    """require_window: None (maybe), "any", or "dates" (date-typed bounds,
+    always at least 2 days apart — window-splitting needs a splittable
+    interval). The require_* knobs exist so metamorphic tests with
+    preconditions generate suitable inputs instead of assume()-ing away
+    most of the domain (Hypothesis filter_too_much)."""
+    case = draw(cases(snapshot=False if event_only else None))
     measures = tuple(draw(st.lists(st.sampled_from(sorted(case.measures)),
                                    min_size=1, max_size=3, unique=True)))
     by = tuple(draw(st.lists(st.sampled_from(["c", "facility.region"]),
@@ -120,10 +127,18 @@ def scenarios(draw, with_compare=False, with_suppress=False,
         ctx["c"] = _ctx_op(draw, CATS)
     if draw(st.booleans()):
         ctx["facility.region"] = _ctx_op(draw, REGIONS)
+    if require_ctx and not ctx:
+        key, pool = draw(st.sampled_from([("c", CATS),
+                                          ("facility.region", REGIONS)]))
+        ctx[key] = _ctx_op(draw, pool)
     win = None
-    if draw(st.booleans()):
+    if require_window or draw(st.booleans()):
         a, b = sorted([_dates(draw), _dates(draw)])
-        if draw(st.booleans()):
+        if require_window == "dates":
+            if (b - a).days < 2:
+                b = a + timedelta(days=draw(st.integers(2, 30)))
+            win = (a, b)
+        elif draw(st.booleans()):
             win = (datetime.combine(a, time(3, 0)),
                    datetime.combine(b, time(21, 0)))
         else:
@@ -225,9 +240,10 @@ def seed(con, case: Case) -> None:
     ts = any(isinstance(r["d"], datetime) for r in case.rows)
     con.execute(f"CREATE TABLE f (d {'TIMESTAMP' if ts else 'DATE'}, "
                 "k VARCHAR, c VARCHAR, v INTEGER, fk VARCHAR)")
-    con.executemany("INSERT INTO f VALUES (?,?,?,?,?)",
-                    [(r["d"], r["k"], r["c"], r["v"], r["fk"])
-                     for r in case.rows])
+    if case.rows:                # executemany rejects an empty parameter list
+        con.executemany("INSERT INTO f VALUES (?,?,?,?,?)",
+                        [(r["d"], r["k"], r["c"], r["v"], r["fk"])
+                         for r in case.rows])
     con.execute("CREATE TABLE dim_fac (fk VARCHAR, region VARCHAR)")
     con.executemany("INSERT INTO dim_fac VALUES (?,?)", list(case.dim_rows))
 
