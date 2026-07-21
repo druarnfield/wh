@@ -1411,7 +1411,7 @@ Run mutation on `timegrain.py` and `context_ops.py` (fast: small files,
 This is hours of wall-clock (hundreds of mutants × the suite). Start it
 in the background and continue; collect results when done.
 
-- [ ] **Step 4: Triage every survivor**
+- [x] **Step 4: Triage every survivor**
 
 For each surviving mutant, one of exactly two outcomes:
 1. **A test gap** — write the test that kills it (this is the payoff;
@@ -1422,7 +1422,7 @@ For each surviving mutant, one of exactly two outcomes:
 
 No third bucket. "Probably fine" is a test gap.
 
-- [ ] **Step 5: Record the baseline and commit**
+- [x] **Step 5: Record the baseline and commit**
 
 Fill in `docs/testing.md`'s Mutation section: date, per-module scores,
 the survivor ledger, and the exact command to re-run.
