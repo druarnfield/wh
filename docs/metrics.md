@@ -189,6 +189,12 @@ semantics:
 `grain=` takes one level and yields one `period` column (period-start date).
 Time is addressed via `grain=`/`compare=`, never `by=`.
 
+Result rows exist only for nonempty groups (`GROUP BY ALL` semantics —
+a period/category with no matching rows is absent, not zero). The one
+exception is standard SQL: with no `grain=` and no `by=` the slice is an
+ungrouped aggregate and always returns exactly one row, even over an
+empty selection (counts 0, sums and ratios NULL).
+
 ### The filter context
 
 An immutable value object over declared attributes — no SQL, ever.

@@ -105,7 +105,8 @@ def _agg(spec, rs):
 
 def slice_oracle(case, measures, by=(), ctx=None, win=None, grain=None):
     """-> {(period?, *by_values): {measure: value}} — only nonempty groups,
-    matching GROUP BY ALL."""
+    matching GROUP BY ALL. With no grouping columns at all the slice is an
+    ungrouped SQL aggregate: exactly one row even over an empty selection."""
     ctx = dict(ctx or {})
     rows = [r for r in case.rows if in_window(r["d"], win)]
     if case.snapshot:
@@ -113,6 +114,8 @@ def slice_oracle(case, measures, by=(), ctx=None, win=None, grain=None):
     for key, op in ctx.items():
         rows = [r for r in rows if passes(_attr(case, r, key), op)]
     groups = {}
+    if grain is None and not by:
+        groups[()] = []
     for r in rows:
         gk = ((period_of(r["d"], grain, case.fys),) if grain else ()) + \
              tuple(_attr(case, r, b) for b in by)
