@@ -66,3 +66,20 @@ def test_from_arrow_backends():
 def test_from_arrow_unknown_backend():
     with pytest.raises(WhError, match="backend"):
         from_arrow(TABLE, "spark")
+
+
+def test_to_arrow_capsule_stream():
+    """mssql-python's cursor returns a streaming reader that is not a
+    pyarrow.RecordBatchReader — it only exposes __arrow_c_stream__.
+    to_arrow must consume it via the PyCapsule interface; this is what
+    lets wh.pull work against SQL Server at all."""
+    class CapsuleOnly:
+        def __init__(self, table):
+            self._table = table
+
+        def __arrow_c_stream__(self, requested_schema=None):
+            return self._table.__arrow_c_stream__(requested_schema)
+
+    out = to_arrow(CapsuleOnly(TABLE))
+    assert isinstance(out, pa.Table)
+    assert out.equals(TABLE)

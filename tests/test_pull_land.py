@@ -137,3 +137,31 @@ def test_module_level_pull(project, fake_mssql, monkeypatch):
     monkeypatch.chdir(project)
     monkeypatch.setattr(wh, "_default", None)
     assert wh.pull("SELECT 1")["n"].to_list() == [1, 2, 3]
+
+
+def test_pull_drains_the_stream_before_closing(project, monkeypatch):
+    """A streaming reader dies with its cursor: pull must finish reading
+    inside to_arrow (read_all) before the finally-close runs."""
+    import wh.sources.mssql as mssql_mod
+
+    class StreamingExtractor:
+        def __init__(self, source):
+            self.closed = False
+
+        def query(self, sql, batch_size=100_000):
+            table, extractor = pa.table({"n": [1, 2, 3]}), self
+
+            class DiesOnClose:
+                def __arrow_c_stream__(self, requested_schema=None):
+                    assert not extractor.closed, "stream read after close"
+                    return table.__arrow_c_stream__(requested_schema)
+
+            return DiesOnClose()
+
+        def close(self):
+            self.closed = True
+
+    monkeypatch.setattr(mssql_mod, "MssqlExtractor", StreamingExtractor)
+    ws = Workspace.load(project / "wh.yaml")
+    df = ws.pull("SELECT 1", backend="pyarrow")
+    assert df.column("n").to_pylist() == [1, 2, 3]
