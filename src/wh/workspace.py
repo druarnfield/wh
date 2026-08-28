@@ -130,6 +130,8 @@ class Workspace:
             )
         extractor = MssqlExtractor(self._source(source))
         try:
+            # read_all() inside to_arrow drains a streaming reader BEFORE
+            # the finally-close below kills its cursor. Keep it that way.
             table = to_arrow(extractor.query(sql))
         finally:
             extractor.close()
