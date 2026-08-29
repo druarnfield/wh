@@ -45,9 +45,22 @@ def test_check_allowed_empty_allowlist_message():
     (pa.time64("us"), "TIME"),
     (pa.decimal128(18, 4), "DECIMAL(18,4)"),
     (pa.binary(), "VARBINARY(MAX)"),
+    (pa.string_view(), "NVARCHAR(MAX)"),
+    (pa.binary_view(), "VARBINARY(MAX)"),
 ])
 def test_sql_type_mapping(arrow_type, expected):
     assert sql_type(pa.field("c", arrow_type)) == expected
+
+
+def test_sql_type_covers_polars_capsule_export():
+    """Polars frames reach to_arrow via __arrow_c_stream__, which exports
+    string columns as string_view — the schema push must accept them."""
+    import polars as pl
+
+    from wh.frames import to_arrow
+
+    table = to_arrow(pl.DataFrame({"b": ["x", "y"]}))
+    assert sql_type(table.schema.field("b")) == "NVARCHAR(MAX)"
 
 
 def test_sql_type_unsupported():

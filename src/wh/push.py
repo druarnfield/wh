@@ -66,7 +66,7 @@ def sql_type(field: pa.Field) -> str:
         return "FLOAT"
     if pat.is_boolean(t):
         return "BIT"
-    if pat.is_string(t) or pat.is_large_string(t):
+    if pat.is_string(t) or pat.is_large_string(t) or pat.is_string_view(t):
         return "NVARCHAR(MAX)"
     if pat.is_date(t):
         return "DATE"
@@ -76,7 +76,7 @@ def sql_type(field: pa.Field) -> str:
         return "TIME"
     if pat.is_decimal(t):
         return f"DECIMAL({t.precision},{t.scale})"
-    if pat.is_binary(t) or pat.is_large_binary(t):
+    if pat.is_binary(t) or pat.is_large_binary(t) or pat.is_binary_view(t):
         return "VARBINARY(MAX)"
     raise WhError(
         f"column '{field.name}': cannot push arrow type {t} to SQL Server"
