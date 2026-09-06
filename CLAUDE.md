@@ -107,6 +107,13 @@ SQL Server. Excel/CSV readers for messy business files. Oracle later.
 
 ## First-consumer integration (2026-09-06)
 
+- `expr:` and ratio components accept `{sum: <row SQL>, nulls: ignore|propagate,
+  where: <optional predicate>}`. The loader lowers this to ordinary SQL;
+  propagate checks every contributing input and preserves unknown totals.
+  A measure-level predicate is lowered onto every sum/check aggregate too.
+  Raw SQL and default ignore behaviour are unchanged. Tests:
+  `tests/metrics/test_aggregate_sugar.py` (values, filters, ratios, empty inputs,
+  snapshot/comparison equivalence and definition hashes).
 - `wh.context(mapping)` accepts declarative scalar/list values and explicit
   eq/in/not/between/all/last operators, preserving existing Python kwargs.
   Empty selections are errors. Relative windows still anchor at slice time.

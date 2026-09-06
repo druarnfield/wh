@@ -275,6 +275,45 @@ def _parse_model(fname, name, spec, shared_dims, fiscal_year_start) -> Model:
     )
 
 
+def _aggregate_sql(fname, where, value, intrinsic=None) -> str:
+    """Lower sum shorthand once; checks, compilation and hashes still see SQL."""
+    if not isinstance(value, dict):
+        return str(value)
+    _reject_unknown(fname, where, value, ("sum", "nulls", "where"))
+    operand = value.get("sum")
+    if (
+        not isinstance(operand, str) or not operand.strip()
+        or re.match(r"\s*DISTINCT\b", operand, re.I)
+    ):
+        raise SemanticsError(
+            f"{fname}: {where}: 'sum:' needs a nonempty row-level SQL expression"
+        )
+    nulls = value.get("nulls", "ignore")
+    if nulls not in ("ignore", "propagate"):
+        raise SemanticsError(
+            f"{fname}: {where}: 'nulls:' must be 'ignore' or 'propagate'"
+        )
+    if intrinsic is not None and "where" in value:
+        raise SemanticsError(
+            f"{fname}: {where}: put 'where:' on the measure or the sum, not both"
+        )
+    predicate = value.get("where", intrinsic)
+    if ("where" in value or intrinsic is not None) and (
+        not isinstance(predicate, str) or not predicate.strip()
+    ):
+        raise SemanticsError(
+            f"{fname}: {where}: 'where:' needs a nonempty SQL predicate"
+        )
+    suffix = f" FILTER (WHERE {predicate})" if predicate is not None else ""
+    total = f"sum({operand}){suffix}"
+    if nulls == "ignore":
+        return total
+    return (
+        f"case when count({operand}){suffix} = count(*){suffix} "
+        f"then {total} end"
+    )
+
+
 def _parse_measure(fname, model, mname, m, snapshot) -> Measure:
     where = f"model '{model}': measure '{mname}'"
     _check_name(fname, "measure", mname)
@@ -306,8 +345,16 @@ def _parse_measure(fname, model, mname, m, snapshot) -> Measure:
                 f"{fname}: {where}: 'where:' on a ratio is ambiguous — put the "
                 f"predicate in the num/den FILTER clauses"
             )
-        ratio = (str(ratio["num"]), str(ratio["den"]))
+        ratio = tuple(
+            _aggregate_sql(fname, f"{where}: ratio.{part}", ratio[part])
+            for part in ("num", "den")
+        )
     intrinsic = str(m["where"]) if m.get("where") is not None else None
+    if isinstance(expr, dict):
+        expr = _aggregate_sql(fname, f"{where}: expr", expr, m.get("where"))
+        # The predicate is now on every aggregate, including the completeness
+        # counts; appending FILTER to the outer CASE would be invalid SQL.
+        intrinsic = None
     if expr is not None and intrinsic is not None and _HAS_FILTER.search(str(expr)):
         raise SemanticsError(
             f"{fname}: {where}: expr already has a FILTER clause — fold the "

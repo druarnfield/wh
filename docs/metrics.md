@@ -120,11 +120,50 @@ measures:
 | Key | Rules |
 |---|---|
 | `description:` | **Required.** An auditable definition without prose isn't one. Not part of the version hash — reword freely. |
-| `expr:` | A DuckDB **aggregate** expression over **fact columns only**. Exactly one of `expr:` / `ratio:`. A non-aggregate expr, or one referencing dimension attributes, is rejected at bind time (a definition depending on a type-1 dim would silently mutate; put attribute logic in the curated schema). |
-| `where:` | The intrinsic predicate — first-class and encouraged; this is where "what counts as a removal" lives, in a diff. Fact columns only. Compiles to `expr FILTER (WHERE ...)`; can't be combined with an expr that already has a FILTER (fold it in). |
-| `ratio:` | `num:` + `den:` aggregate exprs; division happens once, in the outermost select (never averaged over groups). No `where:` on a ratio — put predicates in the num/den FILTERs. |
+| `expr:` | A DuckDB **aggregate** SQL expression, or the sum shorthand below, over **fact columns only**. Exactly one of `expr:` / `ratio:`. A non-aggregate expr, or one referencing dimension attributes, is rejected at bind time (a definition depending on a type-1 dim would silently mutate; put attribute logic in the curated schema). |
+| `where:` | The intrinsic predicate — first-class and encouraged; this is where "what counts as a removal" lives, in a diff. Fact columns only. For raw SQL, compiles to `expr FILTER (WHERE ...)`; can't be combined with an expr that already has a FILTER (fold it in). For sum shorthand, applies to both the sum and its completeness checks. |
+| `ratio:` | `num:` + `den:` aggregate SQL expressions or sum shorthand; division happens once, in the outermost select (never averaged over groups). No `where:` on a ratio — put predicates in each component's SQL FILTER or shorthand `where:`. |
 | `time_agg:` | `sum` \| `last` \| `none`. **Defaults: `last` on snapshot models, `sum` on event facts.** Governs which comparisons are valid (see `compare=`), never plain-grain computability. `sum` on a snapshot model is a load error (model the flow as its own event fact). `avg` is reserved and rejected until averaging-over-snapshots is actually implemented — snapshot slices always read the period's final snapshot, and a label that computes something else would be a lie in the governed file. |
 | `additive: false` | Marks results that must not be re-summed. Distinct counts, medians, modes and ratios are non-additive automatically; provenance names them. |
+
+### Sums and missing inputs
+
+Use a mapping instead of SQL to make a sum's null policy explicit:
+
+```yaml
+measures:
+  waiting_cat_3:
+    description: Category 3 patients waiting.
+    expr: {sum: '"Cat 3"', nulls: propagate}
+  long_wait_share:
+    description: Long waits divided by all patients waiting.
+    ratio:
+      num: {sum: long_waits, nulls: propagate}
+      den: {sum: patients_waiting, nulls: propagate}
+```
+
+`sum:` takes a **row-level SQL expression**, such as `waiting_count` or
+`'"Cat 1" + "Cat 2" + "Cat 3"'`. Quote SQL column names containing spaces
+with double quotes inside the YAML string. Do not put `sum(...)` or
+`DISTINCT` inside it; use raw aggregate SQL for distinct sums.
+
+`nulls: propagate` returns NULL if any contributing row's expression is NULL.
+Zero is a known value. `nulls: ignore` (the default) uses ordinary SQL SUM
+behaviour and skips nulls. Both return NULL for an empty population or one
+with no known values; neither invents a zero.
+
+An optional `where:` inside the mapping limits the contributing population:
+`{sum: waiting_count, nulls: propagate, where: "category = '3'"}`. Missing
+values outside that population do not invalidate its sum. A measure-level
+`where:` also works; declare the predicate in one place, not both. Ratio
+components can have independent predicates and null policies.
+
+The loader expands the mapping to ordinary aggregate SQL before binding.
+The same checks, snapshot selection, comparisons, suppression, explanations
+and definition hashing apply. In particular, unfiltered `nulls: propagate`
+is exactly `case when count(x) = count(*) then sum(x) end`, including its
+definition hash. Existing SQL expressions keep their current behaviour;
+complex aggregates can remain explicit SQL.
 
 ### Naming rules
 
