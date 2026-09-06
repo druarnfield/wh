@@ -369,7 +369,7 @@ def _inner_lines(model, measures, by, ctx_attrs, time_op, grain, cell_n=False):
 
 
 def _sel(prefix: str, name: str, m, alias: str | None = None,
-         suppress: int | None = None) -> str:
+         suppress: int | None = None, component: str | None = None) -> str:
     """Outer-select item for a measure column living in `prefix` (a CTE
     alias, or '' inside the plain wrapper). With suppress, values from
     cells under n rows go NULL — and a ratio also nulls when its own
@@ -378,6 +378,8 @@ def _sel(prefix: str, name: str, m, alias: str | None = None,
     a = f'"{alias or name}"'
     if m.ratio:
         e = f'CAST({p}"__{name}_num" AS DOUBLE) / NULLIF({p}"__{name}_den", 0)'
+        if component is not None:
+            e = f'{p}"__{name}_{component}"'
         if suppress is not None:
             e = (
                 f'CASE WHEN {p}__cell_n < {suppress} '
@@ -390,6 +392,31 @@ def _sel(prefix: str, name: str, m, alias: str | None = None,
             f"AS {a}"
         )
     return f'{p}"{name}"' + (f" AS {a}" if alias else "")
+
+
+
+def _ratio_columns(model, measures, compare):
+    """Reserved output aliases shared by compilation and explanation decoding."""
+    return {
+        name: {
+            lane: {part: f"__explain_{name}_{lane}_{part}"
+                   for part in ('numerator', 'denominator')}
+            for lane in ('base', *compare)
+        }
+        for name in measures if model.measures[name].ratio is not None
+    }
+
+
+def _component_select(model, measures, compare, suppress, *, joined=False):
+    columns = []
+    for name, lanes in _ratio_columns(model, measures, compare).items():
+        for lane, parts in lanes.items():
+            prefix = ('b' if lane == 'base' else f'__cmp_{lane}') if joined else ''
+            for part, alias in parts.items():
+                columns.append(_sel(prefix, name, model.measures[name], alias=alias,
+                                    suppress=suppress,
+                                    component='num' if part == 'numerator' else 'den'))
+    return columns
 
 
 def _indent(lines: list[str]) -> str:
@@ -430,6 +457,7 @@ def compile_slice(
     compare: list[str] = (),
     complete_periods: bool = False,
     suppress: int | None = None,
+    explain: bool = False,
 ) -> Compiled:
     if not measures:
         raise SemanticsError("slice() needs at least one measure")
@@ -472,7 +500,7 @@ def compile_slice(
     if compare:
         return _assemble_compare(
             model, measures, by, ctx_attrs, time_op, grain, compare,
-            lines, group_aliases, applied, ignored, complete_periods, suppress,
+            lines, group_aliases, applied, ignored, complete_periods, suppress, explain,
         )
 
     if has_ratio or complete_periods or suppress is not None:
@@ -482,6 +510,8 @@ def compile_slice(
             _sel("", name, model.measures[name], suppress=suppress)
             for name in measures
         ]
+        if explain:
+            outer += _component_select(model, measures, (), suppress)
         lines = ["SELECT " + ",\n       ".join(outer), "FROM (", _indent(lines), ")"]
         if complete_periods:
             lines.append(
@@ -559,7 +589,7 @@ def _fytd_lines(model, measures, by, ctx_attrs, time_op, grain, group_aliases,
 def _assemble_compare(
     model, measures, by, ctx_attrs, time_op, grain, compare,
     out_lines, group_aliases, applied, ignored, complete_periods=False,
-    suppress=None,
+    suppress=None, explain=False,
 ) -> Compiled:
     """Comparisons are shifted CTEs self-joined back — never lag, so gap
     periods stay NULL instead of slipping. Each CTE carries its own window
@@ -614,6 +644,9 @@ def _assemble_compare(
                 _sel(f"__cmp_{cmp}", mname, m, alias=f"{mname}_{cmp}",
                      suppress=suppress)
             )
+
+    if explain:
+        proj += _component_select(model, measures, compare, suppress, joined=True)
 
     with_block = ", ".join(f"{n} AS (\n{_indent(ls)}\n)" for n, ls in ctes)
     tail = []

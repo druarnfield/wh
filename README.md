@@ -166,3 +166,7 @@ WH_TEST_DSN='...' uv run pytest      # include integration tests
 ```
 
 Design and plans: `docs/plans/`.
+
+Metric consumers can use `wh.context(mapping)` for declarative filters and
+`Slice.explain()` for values, governed ratio components and execution provenance.
+See [the metrics guide](docs/metrics.md#explaining-values-and-ratios).

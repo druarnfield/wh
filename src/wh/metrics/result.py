@@ -92,6 +92,53 @@ class Slice:
             table, backend or self._preferred_backend or default_backend()
         )
 
+    def explain(self) -> dict:
+        """Execute once and explain the values, including governed ratio parts.
+
+        Returns plain records under ``rows``, per-measure ``ratios`` with
+        expressions and component rows aligned with ``rows``, and provenance.
+        Component rows contain only numerator/denominator values (plus
+        comparison suffixes); group keys remain in the corresponding value row.
+        Context, time grain, comparisons, completeness and suppression are
+        identical to frame(). Each call reads the current mirror; it does not
+        describe a previously executed frame or replace that frame's provenance.
+        """
+        from .compiler import _ratio_columns
+        from .provenance import Provenance, capture_data
+
+        compiled = compile_slice(
+            self._model, explain=True,
+            **{k: v for k, v in self._args.items() if k != 'strict_context'},
+        )
+        con = self._con()
+        records = con.sql(compiled.sql).to_arrow_table().to_pylist()
+        captured = capture_data(con, self._model, compiled, self._args)
+        columns = _ratio_columns(self._model, self._args['measures'],
+                                 self._args['compare'])
+        component_names = {col for lanes in columns.values()
+                           for parts in lanes.values() for col in parts.values()}
+        rows = [{k: v for k, v in r.items() if k not in component_names}
+                for r in records]
+        ratios = {}
+        for name, lanes in columns.items():
+            parts = []
+            for record in records:
+                entry = {}
+                for lane, fields in lanes.items():
+                    suffix = '' if lane == 'base' else f'_{lane}'
+                    entry.update({part + suffix: record[col]
+                                  for part, col in fields.items()})
+                parts.append(entry)
+            ratios[name] = {
+                'expressions': dict(zip(('numerator', 'denominator'),
+                                        self._model.measures[name].ratio, strict=True)),
+                'rows': parts,
+            }
+        provenance = Provenance(self._model, compiled, self._args, self._con,
+                                self._warnings, data=captured).to_dict()
+        provenance['shape']['ratio_components'] = True
+        return {'rows': rows, 'ratios': ratios, 'provenance': provenance}
+
     def suppress(self, n: int = 5) -> "Slice":
         """A new Slice with small-cell suppression: cells under n rows read
         NULL, and ratios with denominators under n too."""

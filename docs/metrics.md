@@ -359,3 +359,81 @@ execution: load errors name the file and rule; slice-time errors name the
 declared surface; only genuine engine failures pass through raw (pointing
 at `s.sql`). If you see an inscrutable DuckDB error, that's a bug — report
 it.
+
+## Declarative contexts
+
+Applications can pass an analyst-owned YAML/JSON mapping to the existing
+`wh.context` function. This uses the same operators and two filtering lanes as
+Python contexts; it does not introduce a SQL-expression language.
+
+```yaml
+# Load this mapping with your application's YAML loader, then wh.context(mapping).
+facility__region: {in: [North, South]}
+urgency: {not: Cat 3}
+time:
+  between: ['2026-06-01', '2026-06-30']
+```
+
+Supported operators are `eq`, `in` (a nonempty list), `not` (one scalar),
+`between` (two bounds), and `all: true`. Scalars and lists also work directly.
+Time accepts `between`, `all`, or `last: {n: 3, unit: month}`; `n` must be a
+positive integer and units are day/week/month/year. Relative windows anchor
+to the fact's maximum date at slice construction, as with `wh.last`.
+They are rolling windows, not a request for three complete calendar months.
+Date ranges include both endpoint days. `time: {all: true}` removes the time
+restriction; a snapshot model still applies its latest-snapshot rule.
+
+```python
+ctx = wh.context(mapping)
+selection = ws.model('waitlist').slice(
+    ['patients_waiting', 'pct_over_target'],
+    by=['urgency'], context=ctx, strict_context=True,
+)
+```
+
+Malformed operators and empty selections fail explicitly. Unknown attributes
+remain governed by `strict_context`, exactly as in Python. Keyword arguments
+can override entries in the supplied mapping. `Context.to_dict()` still emits
+the resolved, provenance-ready form; it requires relative contexts to have been
+resolved and encodes dates as ISO strings.
+
+## Explaining values and ratios
+
+`Slice.explain()` executes the slice with ratio components exposed by the same
+compiled query. Applications no longer need to manufacture numerator and
+denominator measures or reconstruct snapshot/filter SQL.
+
+```python
+explanation = selection.explain()
+values = explanation['rows']
+parts = explanation['ratios']['pct_over_target']
+for row, components in zip(values, parts['rows'], strict=True):
+    print(row, components['numerator'], components['denominator'])
+print(parts['expressions'])
+print(explanation['provenance'])
+```
+
+The return value contains plain record dictionaries (native Arrow-converted
+values, so dates/decimals may need encoding when writing JSON):
+
+- `rows`: the usual measure values and group/period keys.
+- `ratios`: selected ratio measures, each with `expressions` and component
+  `rows`. These records align **by position** with the main rows and contain
+  only component values. Keeping group keys in the main rows avoids collisions
+  with dimensions named `numerator` or `denominator`.
+- `provenance`: definitions, resolved context, executed SQL and data capture
+  for this explanation. `shape.ratio_components` is true.
+
+Comparison components use the same suffixes as values: `numerator_prior`,
+`denominator_yoy`, etc. Period/group matching, FYTD recomputation, snapshot
+selection and incomplete-period exclusions use the existing compiler paths.
+Suppressed ratios also suppress both components under the same cell-size and
+denominator rules. An unsuppressed zero denominator stays visible as zero,
+while the ratio itself is null. Empty grouped selections have no rows;
+ungrouped aggregates retain their SQL empty-result behaviour. Non-ratio
+measures, including medians, appear in `rows` without invented components.
+
+Each call executes against the current mirror and captures its own provenance.
+It does not explain an earlier `frame()` execution or overwrite that frame's
+captured provenance. Apart from the normal period ordering, group order is not
+guaranteed across separate executions; use keys to compare separate results.

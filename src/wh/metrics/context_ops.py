@@ -244,8 +244,49 @@ def _coerce_all(kw: dict) -> dict:
     return {k: _coerce(k, v) for k, v in kw.items()}
 
 
-def context(**kw) -> Context:
-    return Context(_coerce_all(kw))
+def _declarative_op(key, value):
+    if not isinstance(value, dict):
+        return value  # scalar/list shorthand follows the existing context API
+    if len(value) != 1:
+        raise SemanticsError(f"context.{key}: use exactly one operator")
+    op, arg = next(iter(value.items()))
+    if op == 'eq':
+        return Eq(arg)
+    if op == 'in' and isinstance(arg, list):
+        return In(tuple(arg))
+    if op == 'not':
+        return Not(arg)
+    if op == 'between' and isinstance(arg, list) and len(arg) == 2:
+        return Between(*arg)
+    if op == 'all' and arg is True:
+        return All()
+    if op == 'last' and key == 'time' and isinstance(arg, dict):
+        if set(arg) == {'n', 'unit'} and type(arg['n']) is int:
+            return last(arg['n'], arg['unit'])
+    raise SemanticsError(
+        f"context.{key}: invalid {op!r} operator — use eq, in, not, "
+        "between, all: true, or time: {last: {n: 1, unit: month}}"
+    )
+
+
+def context(spec=None, /, **kw) -> Context:
+    """Build a context from Python values or an analyst-owned YAML/JSON mapping.
+
+    Mapping operators match to_dict(); time additionally accepts
+    {last: {n: 3, unit: month}}. Keyword arguments override mapping entries.
+    Empty literal selections remain errors, never implicit unfiltered scopes.
+    """
+    if spec is None:
+        spec = {}
+    if not isinstance(spec, dict) or any(not isinstance(k, str) for k in spec):
+        raise SemanticsError('context: expected a mapping with text keys')
+    try:
+        decoded = {k: _declarative_op(k, v) for k, v in spec.items()}
+        return Context(_coerce_all({**decoded, **kw}))
+    except (ValueError, TypeError) as exc:
+        if isinstance(exc, SemanticsError):
+            raise
+        raise SemanticsError(f'context: {exc}') from exc
 
 
 EMPTY = Context({})

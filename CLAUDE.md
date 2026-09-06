@@ -68,7 +68,7 @@ SQL Server. Excel/CSV readers for messy business files. Oracle later.
   `docs/plans/2026-07-20-metrics-phase4.md`.
   DESIGN FULLY DELIVERED (steps 0-4). Later per design: curated-schema
   git hash stamp, `wh.compose()` for cross-fact derived numbers,
-  complementary suppression, context YAML round-trip.
+  complementary suppression.
 - Adversarial round 2 (2026-07-20) over steps 2-4: fixed fytd
   cross-group contamination, month-end day-clamping in shifted compare
   windows (shift the EXCLUSIVE bound), fytd FY-boundary leak at
@@ -104,6 +104,19 @@ SQL Server. Excel/CSV readers for messy business files. Oracle later.
   loader crashed on non-mapping `dimensions:`, and two doc
   clarifications (empty ungrouped slice = one row; empty fytd cell =
   NULL gap, not 0).
+
+## First-consumer integration (2026-09-06)
+
+- `wh.context(mapping)` accepts declarative scalar/list values and explicit
+  eq/in/not/between/all/last operators, preserving existing Python kwargs.
+  Empty selections are errors. Relative windows still anchor at slice time.
+- `Slice.explain()` executes one extended query returning ordinary rows,
+  aligned ratio-component records and execution-specific provenance. Components
+  use the same comparison, completeness and suppression paths; do not recreate
+  measures in consumers. Ordinary frame SQL/provenance remain unchanged.
+- Tests: `tests/metrics/test_explanation.py`, including generated equivalence
+  across event/snapshot, shared dimensions, comparisons, complete periods and
+  suppression. `docs/metrics.md` documents the public contract.
 
 ## Metrics-layer notes (design invariants — keep these true)
 
